@@ -145,7 +145,7 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
 
   // Create account from private key
   const account = privateKeyToAccount(
-    process.env.OPERATOR_PRIVATE_KEY as `0x${string}`,
+    process.env.FAUCET_PRIVATE_KEY as `0x${string}`,
   );
   const faucetAddress = process.env.FAUCET_ADDRESS as Address;
 
