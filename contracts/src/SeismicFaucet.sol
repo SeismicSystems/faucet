@@ -10,7 +10,7 @@ contract SeismicFaucet {
     /// ============ Mutable storage ============
 
     /// @notice ETH to disperse
-    uint256 public ETH_AMOUNT = 1e18; // 1 ETH
+    uint256 public ETH_AMOUNT = 5e17; // 0.5 ETH
     /// @notice Addresses of approved operators
     mapping(address => bool) public approvedOperators;
     /// @notice Addresses of super operators
