@@ -1,6 +1,7 @@
 import axios from "axios"; // Requests
 import Image from "next/image"; // Image
-import { ethers } from "ethers"; // Address check
+// import { ethers } from "ethers"; // Address check
+import { isAddress } from "viem";
 import { toast } from "react-toastify"; // Toast notifications
 import Layout from "components/Layout"; // Layout wrapper
 import { useRouter } from "next/router"; // Router
@@ -8,39 +9,6 @@ import styles from "styles/Home.module.scss"; // Styles
 import { ReactElement, useState } from "react"; // Local state + types
 import { hasClaimed } from "pages/api/claim/status"; // Claim status
 import { signIn, getSession, signOut } from "next-auth/client"; // Auth
-
-/**
- * Check if a provided address is valid
- * @param {string} address to check
- * @returns {boolean} validity
- */
-function isValidAddress(address: string): boolean {
-  try {
-    // Check if address is valid + checksum match
-    ethers.utils.getAddress(address);
-  } catch {
-    // If not, return false
-    return false;
-  }
-
-  // Else, return true
-  return true;
-}
-
-/**
- * Checks if a provider address or ENS name is valid
- * @param {string} address to check
- * @returns {boolean} validity
- */
-export function isValidInput(address: string): boolean {
-  // Check if ENS name
-  if (~address.toLowerCase().indexOf(".eth")) {
-    return true;
-  }
-
-  // Else, check if valid general address
-  return isValidAddress(address);
-}
 
 export default function Home({
   session,
@@ -178,7 +146,7 @@ export default function Home({
                   />
 
 
-                  {isValidInput(address) ? (
+                  {isAddress(address) ? (
                     // If address is valid, allow claiming
                     <button
                       className={styles.button__main}
