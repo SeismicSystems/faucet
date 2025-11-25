@@ -79,7 +79,7 @@ function Head() {
       />
       <meta
         name="description"
-        content="MultiFaucet funds a wallet with ETH, wETH, DAI, and NFTs across 8 testnet networks, at once."
+        content="Seismic Faucet funds your Seismic testnet/devnet wallet."
       />
 
       {/* OG + Facebook */}
@@ -91,7 +91,7 @@ function Head() {
       />
       <meta
         property="og:description"
-        content="MultiFaucet funds a wallet with ETH, wETH, DAI, and NFTs across 8 testnet networks, at once."
+        content="Seismic Faucet funds your Seismic testnet/devnet wallet."
       />
       <meta
         property="og:image"
@@ -107,7 +107,7 @@ function Head() {
       />
       <meta
         property="twitter:description"
-        content="MultiFaucet funds a wallet with ETH, wETH, DAI, and NFTs across 8 testnet networks, at once."
+        content="Seismic Faucet funds your Seismic testnet/devnet wallet."
       />
       <meta
         property="twitter:image"
