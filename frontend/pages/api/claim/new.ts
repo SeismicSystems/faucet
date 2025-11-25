@@ -14,8 +14,6 @@ import { seismicFaucetAbi } from "utils/contract";
 import {
   Address,
   encodeFunctionData,
-  PublicClient,
-  WalletClient,
   createPublicClient,
   createWalletClient,
   Chain,
@@ -23,7 +21,6 @@ import {
   isAddress,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { mainnet } from "viem/chains";
 
 const AMEYA_TWITTER_ID = "1311531128201916417";
 const AMEYA_GITHUB_ID = "74180822";
@@ -31,21 +28,13 @@ const CHRISTIAN_GITHUB_ID = "1449882";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
-// Setup whitelist
-const twitterWhitelist: string[] = [AMEYA_TWITTER_ID];
-const githubWhitelist: string[] = [AMEYA_GITHUB_ID, CHRISTIAN_GITHUB_ID];
-const whitelist: string[] = [...twitterWhitelist, ...githubWhitelist];
+const whitelist = [AMEYA_TWITTER_ID, AMEYA_GITHUB_ID, CHRISTIAN_GITHUB_ID];
 
-// Setup redis client
+// Setup redis and slack clients
 const client = new Redis(process.env.REDIS_URL);
-
-// Setup slack client
 const slack = new WebClient(process.env.SLACK_ACCESS_TOKEN);
-const slackChannel: string = process.env.SLACK_CHANNEL ?? "";
+const slackChannel = process.env.SLACK_CHANNEL ?? "";
 
-/**
- * Post message to slack channel
- */
 async function postSlackMessage(message: string): Promise<void> {
   await slack.chat.postMessage({
     channel: slackChannel,
@@ -54,29 +43,10 @@ async function postSlackMessage(message: string): Promise<void> {
   });
 }
 
-// Network configuration
-interface NetworkConfig {
-  chain: Chain;
-}
+// Network configuration using chain names as keys to avoid ID collision
+const mainNetworks: Chain[] = isDevelopment ? [sanvil] : [seismicTestnet];
+const secondaryNetworks: Chain[] = isDevelopment ? [] : [seismicDevnet1, seismicDevnet2];
 
-const mainNetworkConfigs: Record<number, NetworkConfig> = isDevelopment
-  ? {
-      [sanvil.id]: { chain: sanvil },
-    }
-  : {
-      [seismicTestnet.id]: { chain: seismicTestnet },
-    };
-
-const secondaryNetworkConfigs: Record<number, NetworkConfig> = isDevelopment
-  ? {}
-  : {
-      [seismicDevnet1.id]: { chain: seismicDevnet1 },
-      [seismicDevnet2.id]: { chain: seismicDevnet2 },
-    };
-
-/**
- * Generate encoded transaction data for drip
- */
 function generateTxData(recipient: string): `0x${string}` {
   return encodeFunctionData({
     abi: seismicFaucetAbi,
@@ -85,97 +55,62 @@ function generateTxData(recipient: string): `0x${string}` {
   });
 }
 
-/**
- * Get public client by chain ID
- */
-function getPublicClientByChainId(chainId: number): PublicClient {
-  const allConfigs = { ...mainNetworkConfigs, ...secondaryNetworkConfigs };
-  const config = allConfigs[chainId];
-  
-  if (!config) {
-    throw new Error(`No configuration found for chain ID ${chainId}`);
+async function getNonceForChain(chain: Chain, operatorAddress: Address): Promise<number> {
+  const cacheKey = `nonce-${chain.name}`;
+  const cachedNonce = await client.get(cacheKey);
+
+  if (cachedNonce !== null) {
+    return Number(cachedNonce);
   }
 
-  return createPublicClient({
-    chain: config.chain,
-    transport: http(config.chain.rpcUrls.default.http[0]),
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(),
   });
+
+  return await publicClient.getTransactionCount({ address: operatorAddress });
 }
 
-/**
- * Get wallet client by chain ID
- */
-function getWalletClientByChainId(
-  chainId: number,
-  account: ReturnType<typeof privateKeyToAccount>
-): WalletClient {
-  const allConfigs = { ...mainNetworkConfigs, ...secondaryNetworkConfigs };
-  const config = allConfigs[chainId];
-  
-  if (!config) {
-    throw new Error(`No configuration found for chain ID ${chainId}`);
-  }
-
-  return createWalletClient({
-    account,
-    chain: config.chain,
-    transport: http(config.chain.rpcUrls.default.http[0]),
-  });
-}
-
-/**
- * Get nonce by chain ID (cache first)
- */
-async function getNonceByChainId(chainId: number): Promise<number> {
-  const redisNonce = await client.get(`nonce-${chainId}`);
-
-  if (redisNonce == null) {
-    const publicClient = getPublicClientByChainId(chainId);
-    return await publicClient.getTransactionCount({
-      address: process.env.NEXT_PUBLIC_OPERATOR_ADDRESS as Address,
-    });
-  }
-
-  return Number(redisNonce);
-}
-
-/**
- * Process drip transaction for a network
- */
 async function processDrip(
   account: ReturnType<typeof privateKeyToAccount>,
-  chainId: number,
-  data: `0x${string}`
+  chain: Chain,
+  data: `0x${string}`,
+  faucetAddress: Address
 ): Promise<void> {
-  const publicClient = getPublicClientByChainId(chainId);
-  const walletClient = getWalletClientByChainId(chainId, account);
-  
-  const nonce = await getNonceByChainId(chainId);
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(),
+  });
+
+  const walletClient = createWalletClient({
+    account,
+    chain,
+    transport: http(),
+  });
+
+  const nonce = await getNonceForChain(chain, account.address);
   const gasPrice = await publicClient.getGasPrice();
 
   // Update nonce in redis with 5m TTL
-  await client.set(`nonce-${chainId}`, nonce + 1, "EX", 300);
+  await client.set(`nonce-${chain.name}`, nonce + 1, "EX", 300);
 
   try {
     await walletClient.sendTransaction({
-      account,
-      to: process.env.FAUCET_ADDRESS as Address,
+      to: faucetAddress,
       data,
       gasPrice: gasPrice * BigInt(2),
       gas: BigInt(500_000),
       nonce,
-      chain: walletClient.chain,
     });
   } catch (e: any) {
-    await postSlackMessage(
-      `@ameya Error dripping for chain ${chainId}: ${e.message || String(e)}`
-    );
+    const errorMsg = `@ameya Error dripping for ${chain.name}: ${e.message || String(e)}`;
+    await postSlackMessage(errorMsg);
 
-    // Delete nonce key to attempt self-heal
-    const delStatus = await client.del(`nonce-${chainId}`);
-    await postSlackMessage(`Attempting self heal: ${delStatus}`);
+    // Attempt self-heal by clearing nonce
+    await client.del(`nonce-${chain.name}`);
+    await postSlackMessage(`Attempting self heal for ${chain.name}`);
 
-    throw new Error(`Error when processing drip for chain ${chainId}`);
+    throw new Error(`Error when processing drip for ${chain.name}`);
   }
 }
 
@@ -187,48 +122,27 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     return res.status(401).send({ error: "Not authenticated." });
   }
 
-  // Anti-bot measures
-  if (session.provider === "twitter") {
-    if (!session.twitter_id) {
-      return res.status(400).send({ error: "Invalid Twitter account." });
-    }
-  } else if (session.provider === "github") {
-    if (!session.github_id) {
-      return res.status(400).send({ error: "Invalid GitHub account." });
-    }
-  } else {
-    return res.status(400).send({ error: "Unsupported authentication provider." });
+  // Validate authentication provider
+  const userId = session.provider === "twitter" 
+    ? session.twitter_id 
+    : session.provider === "github" 
+    ? session.github_id 
+    : null;
+
+  if (!userId) {
+    return res.status(400).send({ error: "Invalid authentication." });
   }
 
+  // Validate address
   if (!address || !isAddress(address)) {
     return res.status(400).send({ error: "Invalid address." });
   }
 
-  let addr: string = address;
-
-  // Handle ENS resolution
-  if (address.toLowerCase().includes(".eth")) {
-    const mainnetClient = createPublicClient({
-      chain: mainnet,
-      transport: http(`https://eth-mainnet.alchemyapi.io/v2/${process.env.ALCHEMY_API_KEY}`),
-    });
-
-    const resolvedAddress = await mainnetClient.getEnsAddress({ 
-      name: address as `${string}.eth` 
-    });
-
-    if (!resolvedAddress) {
-      return res.status(400).send({ error: "Invalid ENS name. No reverse record." });
-    }
-
-    addr = resolvedAddress;
-  }
-
-  const userId = session.provider === "twitter" ? session.twitter_id : session.github_id;
   const isWhitelisted = whitelist.includes(userId);
 
+  // Check claim status for non-whitelisted users
   if (!isWhitelisted) {
-    const claimed: boolean = await hasClaimed(userId);
+    const claimed = await hasClaimed(userId);
     if (claimed) {
       return res.status(400).send({ error: "Already claimed in 24h window" });
     }
@@ -236,32 +150,31 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
 
   // Create account from private key
   const account = privateKeyToAccount(process.env.OPERATOR_PRIVATE_KEY as `0x${string}`);
+  const faucetAddress = process.env.FAUCET_ADDRESS as Address;
 
   // Generate transaction data
-  const data = generateTxData(addr);
+  const data = generateTxData(address);
 
   // Determine which networks to claim on
-  const claimNetworkConfigs = others
-    ? { ...mainNetworkConfigs, ...secondaryNetworkConfigs }
-    : mainNetworkConfigs;
+  const networks = others ? [...mainNetworks, ...secondaryNetworks] : mainNetworks;
 
   // Process drip for each network
-  for (const chainId of Object.keys(claimNetworkConfigs)) {
+  for (const chain of networks) {
     try {
-      await processDrip(account, Number(chainId), data);
+      await processDrip(account, chain, data, faucetAddress);
     } catch (e) {
-      // If not whitelisted, force user to wait 15 minutes
+      // Rate limit non-whitelisted users on error
       if (!isWhitelisted) {
-        await client.set(userId, "true", "EX", 900);
+        await client.set(userId, "true", "EX", 900); // 15 min cooldown
       }
 
-      return res
-        .status(500)
-        .send({ error: "Error fully claiming, try again in 15 minutes." });
+      return res.status(500).send({ 
+        error: "Error fully claiming, try again in 15 minutes." 
+      });
     }
   }
 
-  // Update claim status for non-whitelisted users
+  // Set 24h cooldown for non-whitelisted users
   if (!isWhitelisted) {
     await client.set(userId, "true", "EX", 86400);
   }
