@@ -1,10 +1,10 @@
 import Redis from "ioredis";
-import { getSession } from "next-auth/client";
+import { getSession } from "next-auth/react";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { mainNetwork } from "utils/networks";
+import { mainNetwork } from "@/utils/networks";
 
 // Setup redis client
-const client = new Redis(process.env.REDIS_URL);
+const client = new Redis(process.env.REDIS_URL as string);
 
 /**
  * Checks if a user has claimed from faucet on a specific network in last 24h

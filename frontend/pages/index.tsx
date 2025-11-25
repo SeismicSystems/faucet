@@ -2,13 +2,15 @@ import axios from "axios"; // Requests
 import Image from "next/image"; // Image
 import { isAddress } from "viem";
 import { toast } from "react-toastify"; // Toast notifications
-import Layout from "components/Layout"; // Layout wrapper
+import Layout from "@/components/Layout"; // Layout wrapper
 import { useRouter } from "next/router"; // Router
-import styles from "styles/Home.module.scss"; // Styles
+import styles from "@/styles/Home.module.scss"; // Styles
 import { ReactElement, useState } from "react"; // Local state + types
-import { hasClaimed } from "pages/api/claim/status"; // Claim status
-import { signIn, getSession, signOut } from "next-auth/client"; // Auth
-import { mainNetwork } from "utils/networks";
+import { hasClaimed } from "@/pages/api/claim/status"; // Claim status
+import { signIn, signOut } from "next-auth/react"; // Auth
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { mainNetwork } from "@/utils/networks";
 
 export default function Home({
   session,
@@ -201,7 +203,8 @@ export default function Home({
           <div className={styles.home__card_content_section}>
             <h4>General Information</h4>
             <p>
-              Sign in with Twitter or GitHub to claim ETH from the faucet. You must have at least 50 Twitter/X followers or 10 Github followers.
+              Sign in with Twitter or GitHub to claim ETH from the faucet. You
+              must have at least 50 Twitter/X followers or 10 Github followers.
             </p>
             <p className={styles.home__card_content_section_lh}>
               The faucet drips ETH on your configured testnet. Each claim gives
@@ -217,7 +220,11 @@ export default function Home({
 
 export async function getServerSideProps(context: any) {
   // Collect session
-  const session: any = await getSession(context);
+  const session: any = await getServerSession(
+    context.req,
+    context.res,
+    authOptions,
+  );
 
   if (!session) {
     return {

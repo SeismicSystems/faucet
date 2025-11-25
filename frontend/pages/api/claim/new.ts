@@ -1,10 +1,11 @@
 import Redis from "ioredis";
 import { WebClient } from "@slack/web-api";
-import { getSession } from "next-auth/client";
-import { hasClaimed } from "pages/api/claim/status";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { hasClaimed } from "@/pages/api/claim/status";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-import { seismicFaucetAbi } from "utils/contract";
+import { seismicFaucetAbi } from "@/utils/contract";
 import {
   Address,
   encodeFunctionData,
@@ -15,7 +16,7 @@ import {
   isAddress,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { mainNetwork } from "utils/networks";
+import { mainNetwork } from "@/utils/networks";
 
 const AMEYA_TWITTER_ID = "1311531128201916417";
 const AMEYA_GITHUB_ID = "74180822";
@@ -27,7 +28,7 @@ const MIN_TWITTER_FOLLOWERS = 50;
 const MIN_GITHUB_FOLLOWERS = 10;
 
 // Setup redis and slack clients
-const client = new Redis(process.env.REDIS_URL);
+const client = new Redis(process.env.REDIS_URL as string);
 const slack = new WebClient(process.env.SLACK_ACCESS_TOKEN);
 const slackChannel = process.env.SLACK_CHANNEL ?? "";
 
@@ -110,7 +111,7 @@ async function processDrip(
 }
 
 export default async (req: NextApiRequest, res: NextApiResponse) => {
-  const session: any = await getSession({ req });
+  const session: any = await getServerSession(req, res, authOptions);
   const { address, others }: { address: string; others: boolean } = req.body;
 
   if (!session) {
