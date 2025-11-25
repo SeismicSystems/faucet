@@ -20,7 +20,9 @@
     "react": "17.0.2",
     "react-dom": "17.0.2",
     "react-toastify": "^8.0.3",
-    "sass": "^1.42.1"
+    "sass": "^1.42.1",
+    "seismic-viem": "^1.0.50",
+    "viem": "^2.40.2"
   },
   "devDependencies": {
     "@types/ioredis": "^4.27.7",

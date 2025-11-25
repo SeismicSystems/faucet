@@ -1,11 +1,13 @@
 import Redis from "ioredis"; // Redis
-import { ethers } from "ethers"; // Ethers
+// import { ethers } from "ethers"; // Ethers
 import { WebClient } from "@slack/web-api"; // Slack
 import { isValidInput } from "pages/index"; // Address check
 import parseTwitterDate from "utils/dates"; // Parse Twitter dates
 import { getSession } from "next-auth/client"; // Session management
 import { hasClaimed } from "pages/api/claim/status"; // Claim status
 import type { NextApiRequest, NextApiResponse } from "next"; // Types
+
+import { seismicFaucetAbi } from "utils/contract";
 
 const AMEYA_TWITTER_ID = "1311531128201916417";
 const AMEYA_GITHUB_ID = "74180822";
