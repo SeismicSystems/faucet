@@ -208,7 +208,7 @@ export default function Home({
             </p>
             <p className={styles.home__card_content_section_lh}>
               The faucet drips ETH on your configured testnet. Each claim gives
-              you 1 ETH.
+              you 0.5 ETH.
             </p>
             <p>You can claim from the faucet once every 24 hours.</p>
           </div>
