@@ -11,7 +11,7 @@
     "lint": "bun run next lint",
     "contracts:compile": "bun run --cwd ../contracts sforge build",
     "contracts:test": "bun run --cwd ../contracts sforge test",
-    "contracts:deploy": "source .env && RPC_URL=$RPC_URL FAUCET_PRIVATE_KEY=$FAUCET_PRIVATE_KEY FAUCET_RESERVE_PRIVATE_KEY=$FAUCET_RESERVE_PRIVATE_KEY bun run --cwd ../contracts forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast --private-key $FAUCET_PRIVATE_KEY"
+    "contracts:deploy": "source .env && RPC_URL=$RPC_URL FAUCET_PRIVATE_KEY=$FAUCET_PRIVATE_KEY FAUCET_RESERVE_PRIVATE_KEY=$FAUCET_RESERVE_PRIVATE_KEY bun run --cwd ../contracts sforge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast --private-key $FAUCET_PRIVATE_KEY"
   },
   "dependencies": {
     "@slack/web-api": "^7.10.0",
