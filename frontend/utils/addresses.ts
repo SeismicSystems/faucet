@@ -175,7 +175,7 @@ export function getAddressDetails() {
   // Get active networks
   const activeNetworks: string[] = ADDRESSES.filter(
     // Filter for non-depleted
-    ({ depleted }) => !depleted
+    ({ depleted }) => !depleted,
     // Collect just formatted name
   ).map(({ formattedName }) => formattedName);
   // Get number of active networks

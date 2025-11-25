@@ -1,10 +1,10 @@
 import Redis from "ioredis";
 import { WebClient } from "@slack/web-api";
-import { 
-  seismicDevnet1, 
-  seismicDevnet2, 
-  sanvil, 
-  seismicTestnet 
+import {
+  seismicDevnet1,
+  seismicDevnet2,
+  sanvil,
+  seismicTestnet,
 } from "seismic-viem";
 import { getSession } from "next-auth/client";
 import { hasClaimed } from "pages/api/claim/status";
@@ -45,7 +45,9 @@ async function postSlackMessage(message: string): Promise<void> {
 
 // Network configuration using chain names as keys to avoid ID collision
 const mainNetworks: Chain[] = isDevelopment ? [sanvil] : [seismicTestnet];
-const secondaryNetworks: Chain[] = isDevelopment ? [] : [seismicDevnet1, seismicDevnet2];
+const secondaryNetworks: Chain[] = isDevelopment
+  ? []
+  : [seismicDevnet1, seismicDevnet2];
 
 function generateTxData(recipient: string): `0x${string}` {
   return encodeFunctionData({
@@ -55,7 +57,10 @@ function generateTxData(recipient: string): `0x${string}` {
   });
 }
 
-async function getNonceForChain(chain: Chain, operatorAddress: Address): Promise<number> {
+async function getNonceForChain(
+  chain: Chain,
+  operatorAddress: Address,
+): Promise<number> {
   const cacheKey = `nonce-${chain.name}`;
   const cachedNonce = await client.get(cacheKey);
 
@@ -75,7 +80,7 @@ async function processDrip(
   account: ReturnType<typeof privateKeyToAccount>,
   chain: Chain,
   data: `0x${string}`,
-  faucetAddress: Address
+  faucetAddress: Address,
 ): Promise<void> {
   const publicClient = createPublicClient({
     chain,
@@ -123,11 +128,12 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
   }
 
   // Validate authentication provider
-  const userId = session.provider === "twitter" 
-    ? session.twitter_id 
-    : session.provider === "github" 
-    ? session.github_id 
-    : null;
+  const userId =
+    session.provider === "twitter"
+      ? session.twitter_id
+      : session.provider === "github"
+        ? session.github_id
+        : null;
 
   if (!userId) {
     return res.status(400).send({ error: "Invalid authentication." });
@@ -149,14 +155,18 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
   }
 
   // Create account from private key
-  const account = privateKeyToAccount(process.env.OPERATOR_PRIVATE_KEY as `0x${string}`);
+  const account = privateKeyToAccount(
+    process.env.OPERATOR_PRIVATE_KEY as `0x${string}`,
+  );
   const faucetAddress = process.env.FAUCET_ADDRESS as Address;
 
   // Generate transaction data
   const data = generateTxData(address);
 
   // Determine which networks to claim on
-  const networks = others ? [...mainNetworks, ...secondaryNetworks] : mainNetworks;
+  const networks = others
+    ? [...mainNetworks, ...secondaryNetworks]
+    : mainNetworks;
 
   // Process drip for each network
   for (const chain of networks) {
@@ -168,8 +178,8 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
         await client.set(userId, "true", "EX", 900); // 15 min cooldown
       }
 
-      return res.status(500).send({ 
-        error: "Error fully claiming, try again in 15 minutes." 
+      return res.status(500).send({
+        error: "Error fully claiming, try again in 15 minutes.",
       });
     }
   }

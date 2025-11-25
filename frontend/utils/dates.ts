@@ -28,7 +28,7 @@ export default function parseTwitterDate(dateString: string): Date {
       Number(b[2]),
       Number(b[3]),
       Number(b[4]),
-      Number(b[5])
-    )
+      Number(b[5]),
+    ),
   );
 }

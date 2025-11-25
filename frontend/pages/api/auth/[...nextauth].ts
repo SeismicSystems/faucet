@@ -39,17 +39,17 @@ export default NextAuth({
 
       // If signing in
       if (isSignIn) {
-        if (account?.provider === 'twitter') {
+        if (account?.provider === "twitter") {
           // Attach Twitter parameters
-          token.provider = 'twitter';
+          token.provider = "twitter";
           token.twitter_id = account?.id;
           token.twitter_handle = profile?.screen_name;
           token.twitter_num_tweets = profile?.statuses_count;
           token.twitter_num_followers = profile?.followers_count;
           token.twitter_created_at = profile?.created_at;
-        } else if (account?.provider === 'github') {
+        } else if (account?.provider === "github") {
           // Attach GitHub parameters - use profile.id which matches the GitHub API user ID
-          token.provider = 'github';
+          token.provider = "github";
           token.github_id = profile?.id?.toString(); // This should be "74180822"
           token.github_username = profile?.login;
           token.github_public_repos = profile?.public_repos;
@@ -65,15 +65,15 @@ export default NextAuth({
     session: async (session, user) => {
       // Attach provider info
       session.provider = user.provider;
-      
-      if (user.provider === 'twitter') {
+
+      if (user.provider === "twitter") {
         // Attach Twitter params from JWT to session
         session.twitter_id = user.twitter_id;
         session.twitter_handle = user.twitter_handle;
         session.twitter_num_tweets = user.twitter_num_tweets;
         session.twitter_num_followers = user.twitter_num_followers;
         session.twitter_created_at = user.twitter_created_at;
-      } else if (user.provider === 'github') {
+      } else if (user.provider === "github") {
         // Attach GitHub params from JWT to session
         session.github_id = user.github_id;
         session.github_username = user.github_username;
