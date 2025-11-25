@@ -1,11 +1,5 @@
 import Redis from "ioredis";
 import { WebClient } from "@slack/web-api";
-import {
-  seismicDevnet1,
-  seismicDevnet2,
-  sanvil,
-  seismicTestnet,
-} from "seismic-viem";
 import { getSession } from "next-auth/client";
 import { hasClaimed } from "pages/api/claim/status";
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -21,12 +15,11 @@ import {
   isAddress,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { mainNetwork } from "utils/networks";
 
 const AMEYA_TWITTER_ID = "1311531128201916417";
 const AMEYA_GITHUB_ID = "74180822";
 const CHRISTIAN_GITHUB_ID = "1449882";
-
-const isDevelopment = process.env.NODE_ENV === "development";
 
 const whitelist = [AMEYA_TWITTER_ID, AMEYA_GITHUB_ID, CHRISTIAN_GITHUB_ID];
 
@@ -42,12 +35,6 @@ async function postSlackMessage(message: string): Promise<void> {
     link_names: true,
   });
 }
-
-// Network configuration using chain names as keys to avoid ID collision
-const mainNetworks: Chain[] = isDevelopment ? [sanvil] : [seismicTestnet];
-const secondaryNetworks: Chain[] = isDevelopment
-  ? []
-  : [seismicDevnet1, seismicDevnet2];
 
 function generateTxData(recipient: string): `0x${string}` {
   return encodeFunctionData({
@@ -148,45 +135,50 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
 
   // Check claim status for non-whitelisted users
   if (!isWhitelisted) {
-    const claimed = await hasClaimed(userId);
+    const claimed = await hasClaimed(userId, mainNetwork.name);
     if (claimed) {
-      return res.status(400).send({ error: "Already claimed in 24h window" });
+      return res.status(400).send({
+        error: "Already claimed in 24h window",
+      });
     }
   }
 
   // Create account from private key
   const account = privateKeyToAccount(
-    process.env.FAUCET_PRIVATE_KEY as `0x${string}`, // private key of operator of the faucet 
+    process.env.OPERATOR_PRIVATE_KEY as `0x${string}`,
   );
   const faucetAddress = process.env.FAUCET_ADDRESS as Address;
 
   // Generate transaction data
   const data = generateTxData(address);
 
-  // Determine which networks to claim on
-  const networks = others
-    ? [...mainNetworks, ...secondaryNetworks]
-    : mainNetworks;
-
-  // Process drip for each network
-  for (const chain of networks) {
-    try {
-      await processDrip(account, chain, data, faucetAddress);
-    } catch (e) {
-      // Rate limit non-whitelisted users on error
-      if (!isWhitelisted) {
-        await client.set(userId, "true", "EX", 900); // 15 min cooldown
-      }
-
-      return res.status(500).send({
-        error: "Error fully claiming, try again in 15 minutes.",
-      });
+  // Process drip on main network
+  try {
+    await processDrip(account, mainNetwork, data, faucetAddress);
+  } catch (e) {
+    // Rate limit non-whitelisted users on error
+    if (!isWhitelisted) {
+      await client.set(
+        `faucet:${mainNetwork.name}:${userId}`,
+        "true",
+        "EX",
+        900,
+      ); // 15 min cooldown
     }
+
+    return res.status(500).send({
+      error: "Error claiming, try again in 15 minutes.",
+    });
   }
 
   // Set 24h cooldown for non-whitelisted users
   if (!isWhitelisted) {
-    await client.set(userId, "true", "EX", 86400);
+    await client.set(
+      `faucet:${mainNetwork.name}:${userId}`,
+      "true",
+      "EX",
+      86400,
+    );
   }
 
   if (isWhitelisted) {

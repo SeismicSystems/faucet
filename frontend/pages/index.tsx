@@ -8,6 +8,7 @@ import styles from "styles/Home.module.scss"; // Styles
 import { ReactElement, useState } from "react"; // Local state + types
 import { hasClaimed } from "pages/api/claim/status"; // Claim status
 import { signIn, getSession, signOut } from "next-auth/client"; // Auth
+import { mainNetwork } from "utils/networks";
 
 export default function Home({
   session,
@@ -239,11 +240,23 @@ export async function getServerSideProps(context: any) {
   const whitelist = [AMEYA_GITHUB_ID, CHRISTIAN_GITHUB_ID, AMEYA_TWITTER_ID];
   const isWhitelisted = whitelist.includes(userId);
 
+  // If whitelisted, always show as not claimed
+  if (isWhitelisted) {
+    return {
+      props: {
+        session,
+        claimed: false,
+      },
+    };
+  }
+
+  // Check if user has claimed on the main network
+  const claimed = await hasClaimed(userId, mainNetwork.name);
+
   return {
     props: {
       session,
-      // If whitelisted, always show as not claimed (can claim anytime)
-      claimed: isWhitelisted ? false : await hasClaimed(userId),
+      claimed,
     },
   };
 }
