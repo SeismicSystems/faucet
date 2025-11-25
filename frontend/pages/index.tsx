@@ -1,6 +1,5 @@
 import axios from "axios"; // Requests
 import Image from "next/image"; // Image
-// import { ethers } from "ethers"; // Address check
 import { isAddress } from "viem";
 import { toast } from "react-toastify"; // Toast notifications
 import Layout from "components/Layout"; // Layout wrapper
