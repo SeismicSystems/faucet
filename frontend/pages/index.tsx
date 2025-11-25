@@ -92,7 +92,7 @@ export default function Home({
             <div className={styles.content__unauthenticated}>
               {/* Reasoning for OAuth */}
               <p>
-                To prevent faucet botting, you must sign in with Twitter or
+                To prevent faucet botting, you must sign in with Twitter/X or
                 GitHub. We request read-only access to verify your account.
               </p>
 
@@ -108,7 +108,7 @@ export default function Home({
                   className={styles.button__main}
                   onClick={() => signIn("twitter")}
                 >
-                  Sign In with Twitter
+                  Sign In with Twitter/X
                 </button>
                 <button
                   className={styles.button__main}
@@ -201,8 +201,7 @@ export default function Home({
           <div className={styles.home__card_content_section}>
             <h4>General Information</h4>
             <p>
-              Sign in with Twitter or GitHub to claim ETH from the faucet. No
-              minimum requirements - just need a valid account.
+              Sign in with Twitter or GitHub to claim ETH from the faucet. You must have at least 50 Twitter/X followers or 10 Github followers.
             </p>
             <p className={styles.home__card_content_section_lh}>
               The faucet drips ETH on your configured testnet. Each claim gives

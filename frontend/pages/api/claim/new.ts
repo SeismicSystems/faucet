@@ -23,6 +23,9 @@ const CHRISTIAN_GITHUB_ID = "1449882";
 
 const whitelist = [AMEYA_TWITTER_ID, AMEYA_GITHUB_ID, CHRISTIAN_GITHUB_ID];
 
+const MIN_TWITTER_FOLLOWERS = 50;
+const MIN_GITHUB_FOLLOWERS = 10;
+
 // Setup redis and slack clients
 const client = new Redis(process.env.REDIS_URL);
 const slack = new WebClient(process.env.SLACK_ACCESS_TOKEN);
@@ -124,6 +127,26 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
 
   if (!userId) {
     return res.status(400).send({ error: "Invalid authentication." });
+  }
+
+  // Validate Twitter followers
+  if (session.provider === "twitter") {
+    const followerCount = session.twitter_num_followers || 0;
+    if (followerCount < MIN_TWITTER_FOLLOWERS) {
+      return res.status(403).send({
+        error: `Minimum ${MIN_TWITTER_FOLLOWERS} Twitter followers required. You have ${followerCount}.`,
+      });
+    }
+  }
+
+  // Validate GitHub followers
+  if (session.provider === "github") {
+    const followerCount = session.github_followers || 0;
+    if (followerCount < MIN_GITHUB_FOLLOWERS) {
+      return res.status(403).send({
+        error: `Minimum ${MIN_GITHUB_FOLLOWERS} GitHub followers required. You have ${followerCount}.`,
+      });
+    }
   }
 
   // Validate address
