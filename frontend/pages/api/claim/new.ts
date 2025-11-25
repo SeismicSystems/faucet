@@ -245,11 +245,17 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
 
   // Use provider-specific ID for claim tracking
   const userId = session.provider === 'twitter' ? session.twitter_id : session.github_id;
+
+  // Check is user is whitelisted
+  const isWhitelisted = whitelist.includes(userId);
+
+  if (!isWhitelisted) {
   const claimed: boolean = await hasClaimed(userId);
   if (claimed) {
     // Return already claimed status
     return res.status(400).send({ error: "Already claimed in 24h window" });
   }
+}
 
   // Setup wallet w/o RPC provider
   const wallet = new ethers.Wallet(process.env.OPERATOR_PRIVATE_KEY ?? "");
