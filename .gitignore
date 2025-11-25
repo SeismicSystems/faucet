@@ -33,3 +33,6 @@ yarn-error.log*
 
 # VSCode
 .vscode
+
+# Redis
+dump.rdb
