@@ -95,7 +95,7 @@ async function processDrip(
       nonce,
     });
   } catch (e: any) {
-    const errorMsg = `@ameya Error dripping for ${chain.name}: ${e.message || String(e)}`;
+    const errorMsg = `Error dripping for ${chain.name}: ${e.message || String(e)}`;
     await postSlackMessage(errorMsg);
 
     // Attempt self-heal by clearing nonce
