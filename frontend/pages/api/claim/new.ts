@@ -35,10 +35,10 @@ async function postSlackMessage(message: string): Promise<void> {
   });
 }
 
-function generateTxData(recipient: string): `0x${string}` {
+function generateTxData(recipient: string, isWhitelisted: boolean): `0x${string}` {
   return encodeFunctionData({
     abi: seismicFaucetAbi,
-    functionName: "drip",
+    functionName: isWhitelisted ? "dripWhitelist" : "drip",
     args: [recipient as Address],
   });
 }
@@ -168,8 +168,8 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
   );
   const faucetAddress = process.env.FAUCET_ADDRESS as Address;
 
-  // Generate transaction data
-  const data = generateTxData(address);
+  // Generate transaction data (use dripWhitelist for whitelisted users)
+  const data = generateTxData(address, isWhitelisted);
 
   // Process drip on main network
   try {

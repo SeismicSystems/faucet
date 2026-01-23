@@ -74,6 +74,13 @@ export const seismicFaucetAbi = [
   },
   {
     type: "function",
+    name: "WHITELIST_ETH_AMOUNT",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
+  },
+  {
+    type: "function",
     name: "approvedOperators",
     stateMutability: "view",
     inputs: [{ name: "", type: "address", internalType: "address" }],
@@ -97,6 +104,19 @@ export const seismicFaucetAbi = [
   {
     type: "function",
     name: "drip",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "_recipient",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "dripWhitelist",
     stateMutability: "nonpayable",
     inputs: [
       {
@@ -159,6 +179,19 @@ export const seismicFaucetAbi = [
   {
     type: "function",
     name: "updateDripAmount",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "_ethAmount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "updateWhitelistDripAmount",
     stateMutability: "nonpayable",
     inputs: [
       {

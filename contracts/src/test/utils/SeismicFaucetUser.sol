@@ -38,6 +38,12 @@ contract SeismicFaucetUser {
         FAUCET.drip(_recipient);
     }
 
+    /// @notice Drips whitelist amount from faucet to recipient
+    /// @param _recipient to drip to
+    function dripWhitelist(address _recipient) public {
+        FAUCET.dripWhitelist(_recipient);
+    }
+
     /// @notice Drains faucet to a recipient address
     /// @param _recipient to drain to
     function drain(address _recipient) public {
@@ -62,6 +68,12 @@ contract SeismicFaucetUser {
     /// @param _ethAmount ETH to drip
     function updateDripAmount(uint256 _ethAmount) public {
         FAUCET.updateDripAmount(_ethAmount);
+    }
+
+    /// @notice Updates whitelist drip amount
+    /// @param _ethAmount ETH to drip to whitelisted users
+    function updateWhitelistDripAmount(uint256 _ethAmount) public {
+        FAUCET.updateWhitelistDripAmount(_ethAmount);
     }
 
     /// @notice Allows receiving ETH

@@ -11,6 +11,8 @@ contract SeismicFaucet {
 
     /// @notice ETH to disperse
     uint256 public ETH_AMOUNT = 5e17; // 0.5 ETH
+    /// @notice ETH to disperse to whitelisted users
+    uint256 public WHITELIST_ETH_AMOUNT = 10e18; // 10 ETH
     /// @notice Addresses of approved operators
     mapping(address => bool) public approvedOperators;
     /// @notice Addresses of super operators
@@ -70,6 +72,16 @@ contract SeismicFaucet {
         emit FaucetDripped(_recipient);
     }
 
+    /// @notice Drips larger ETH amount to whitelisted recipient
+    /// @param _recipient to drip tokens to
+    function dripWhitelist(address _recipient) external isApprovedOperator {
+        // Drip Ether (whitelist amount)
+        (bool sent,) = _recipient.call{value: WHITELIST_ETH_AMOUNT}("");
+        require(sent, "Failed dripping ETH");
+
+        emit FaucetDripped(_recipient);
+    }
+
     /// @notice Returns number of available ETH drips
     /// @return ethDrips — available Ether drips
     function availableDrips() public view returns (uint256 ethDrips) {
@@ -106,6 +118,12 @@ contract SeismicFaucet {
     /// @param _ethAmount ETH to drip
     function updateDripAmount(uint256 _ethAmount) external isSuperOperator {
         ETH_AMOUNT = _ethAmount;
+    }
+
+    /// @notice Allows super operator to update whitelist drip amount
+    /// @param _ethAmount ETH to drip to whitelisted users
+    function updateWhitelistDripAmount(uint256 _ethAmount) external isSuperOperator {
+        WHITELIST_ETH_AMOUNT = _ethAmount;
     }
 
     /// @notice Allows receiving ETH
