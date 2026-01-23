@@ -17,12 +17,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { mainNetwork } from "@/utils/networks";
-
-const AMEYA_TWITTER_ID = "1311531128201916417";
-const AMEYA_GITHUB_ID = "74180822";
-const CHRISTIAN_GITHUB_ID = "1449882";
-
-const whitelist = [AMEYA_TWITTER_ID, AMEYA_GITHUB_ID, CHRISTIAN_GITHUB_ID];
+import { whitelist } from "@/utils/whitelist";
 
 const MIN_TWITTER_FOLLOWERS = 50;
 const MIN_GITHUB_FOLLOWERS = 10;
