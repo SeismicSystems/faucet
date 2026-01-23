@@ -14,7 +14,7 @@
         "react-dom": "^18.3.1",
         "react-toastify": "^11.0.2",
         "sass": "^1.83.0",
-        "seismic-viem": "^1.0.50",
+        "seismic-viem": "1.1.0",
         "viem": "^2.40.2",
       },
       "devDependencies": {
@@ -741,7 +741,7 @@
 
     "scheduler": ["scheduler@0.23.2", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ=="],
 
-    "seismic-viem": ["seismic-viem@1.0.50", "", { "dependencies": { "@noble/ciphers": "^1.2.0", "@noble/curves": "^1.8.0", "@noble/hashes": "^1.7.0" }, "peerDependencies": { "viem": "2.x" } }, "sha512-p25LX2CS8uCNEv4/PZ4tK0B1N1DNcIE6oXvYwUa52XJS2VGVmZg/c6TOyQuqqLWO9iBQJInl1qDb+/hoqQ91gw=="],
+    "seismic-viem": ["seismic-viem@1.1.0", "", { "dependencies": { "@noble/ciphers": "^1.2.0", "@noble/curves": "^1.8.0", "@noble/hashes": "^1.7.0" }, "peerDependencies": { "viem": "2.x" } }, "sha512-4NTr2Vu6cFpVQhqXYajJ7P9/G9Xrig6mRBwwdbPzvTdkrvcihcVHp9K6odE4nDl4wAogdS3fM5CL7G2jXyNkow=="],
 
     "semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
 
