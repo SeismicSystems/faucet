@@ -45,9 +45,13 @@ export default function Home({
 
     try {
       // Post new claim with recipient address
-      await axios.post("/api/claim/new", { address });
+      const response = await axios.post("/api/claim/new", { address });
       // Toast if success + toggle claimed
-      toast.success("Tokens dispersed—check balances shortly!");
+      if (response.data.isWhitelisted) {
+        toast.success("You are whitelisted!! 🎉 Dripping 10 ETH...");
+      } else {
+        toast.success("Tokens dispersed—check balances shortly!");
+      }
       setClaimed(true);
       setFirstClaim(true);
     } catch (error: any) {

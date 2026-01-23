@@ -201,8 +201,8 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
   }
 
   if (isWhitelisted) {
-    console.log(`${address} claimed from faucet`);
+    console.log(`${address} claimed from faucet (whitelisted)`);
   }
 
-  return res.status(200).send({ claimed: address });
+  return res.status(200).send({ claimed: address, isWhitelisted });
 };
