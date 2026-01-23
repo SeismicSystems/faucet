@@ -18,6 +18,7 @@ const BROOKWELL_TEAM = [
 // Chainlink team GitHub IDs
 const CHAINLINK_TEAM = [
   "2430254",    // Todor Karaivanov (@tkaraivanov)
+  "164586642", // Felix Medina (@femedmad)
 ];
 
 // Twitter IDs (separate since they're a different provider)
