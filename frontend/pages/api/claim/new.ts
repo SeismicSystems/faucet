@@ -125,8 +125,10 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     return res.status(400).send({ error: "Invalid authentication." });
   }
 
-  // Validate Twitter followers
-  if (session.provider === "twitter") {
+  const isWhitelisted = whitelist.includes(userId);
+
+  // Validate Twitter followers (skip for whitelisted users)
+  if (!isWhitelisted && session.provider === "twitter") {
     const followerCount = session.twitter_num_followers || 0;
     if (followerCount < MIN_TWITTER_FOLLOWERS) {
       return res.status(403).send({
@@ -135,8 +137,8 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     }
   }
 
-  // Validate GitHub followers
-  if (session.provider === "github") {
+  // Validate GitHub followers (skip for whitelisted users)
+  if (!isWhitelisted && session.provider === "github") {
     const followerCount = session.github_followers || 0;
     if (followerCount < MIN_GITHUB_FOLLOWERS) {
       return res.status(403).send({
@@ -149,8 +151,6 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
   if (!address || !isAddress(address)) {
     return res.status(400).send({ error: "Invalid address." });
   }
-
-  const isWhitelisted = whitelist.includes(userId);
 
   // Check claim status for non-whitelisted users
   if (!isWhitelisted) {
