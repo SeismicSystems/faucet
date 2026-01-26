@@ -21,6 +21,11 @@ const CHAINLINK_TEAM = [
   "164586642", // Felix Medina (@femedmad)
 ];
 
+// Pimlico team GitHub IDs
+const PIMLICO_TEAM = [
+  "97399882",    // mous (@mouseless0x)
+];
+
 // Twitter IDs (separate since they're a different provider)
 const TWITTER_WHITELIST = [
   "1311531128201916417", // Ameya Deshmukh (@0xameya)
@@ -30,5 +35,6 @@ export const whitelist = [
   ...SEISMIC_TEAM,
   ...BROOKWELL_TEAM,
   ...CHAINLINK_TEAM,
+  ...PIMLICO_TEAM,
   ...TWITTER_WHITELIST,
 ];
