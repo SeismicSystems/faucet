@@ -1,6 +1,6 @@
 // Seismic team GitHub IDs
 const SEISMIC_TEAM = [
-  "74180822",   // Ameya Deshmukh (@ameya-deshmukh)
+  // "74180822",   // Ameya Deshmukh (@ameya-deshmukh)
   "1449882",    // Christian Drappi (@cdrappi)
   "25928722",   // Matthias Wright (@matthias-wright)
   "71679972",   // Dalton Coder (@daltoncoder)
