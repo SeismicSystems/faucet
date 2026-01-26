@@ -68,6 +68,10 @@ async function processDrip(
   data: `0x${string}`,
   faucetAddress: Address,
 ): Promise<void> {
+  console.log(`[processDrip] Starting drip on chain: ${chain.name}`);
+  console.log(`[processDrip] Faucet address: ${faucetAddress}`);
+  console.log(`[processDrip] TX data: ${data}`);
+
   const publicClient = createPublicClient({
     chain,
     transport: http(),
@@ -82,18 +86,23 @@ async function processDrip(
   const nonce = await getNonceForChain(chain, account.address);
   const gasPrice = await publicClient.getGasPrice();
 
+  console.log(`[processDrip] Nonce: ${nonce}, Gas price: ${gasPrice}`);
+
   // Update nonce in redis with 5m TTL
   await client.set(`nonce-${chain.name}`, nonce + 1, "EX", 300);
 
   try {
-    await walletClient.sendTransaction({
+    console.log(`[processDrip] Sending transaction...`);
+    const txHash = await walletClient.sendTransaction({
       to: faucetAddress,
       data,
       gasPrice: gasPrice * BigInt(2),
       gas: BigInt(500_000),
       nonce,
     });
+    console.log(`[processDrip] Transaction sent! Hash: ${txHash}`);
   } catch (e: any) {
+    console.error(`[processDrip] ERROR: ${e.message || String(e)}`);
     const errorMsg = `Error dripping for ${chain.name}: ${e.message || String(e)}`;
     await postSlackMessage(errorMsg);
 
@@ -106,10 +115,15 @@ async function processDrip(
 }
 
 export default async (req: NextApiRequest, res: NextApiResponse) => {
+  console.log(`[claim/new] === New claim request ===`);
   const session: any = await getServerSession(req, res, authOptions);
   const { address, others }: { address: string; others: boolean } = req.body;
 
+  console.log(`[claim/new] Address: ${address}`);
+  console.log(`[claim/new] Session provider: ${session?.provider}`);
+
   if (!session) {
+    console.log(`[claim/new] No session - returning 401`);
     return res.status(401).send({ error: "Not authenticated." });
   }
 
@@ -121,11 +135,15 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
         ? session.github_id
         : null;
 
+  console.log(`[claim/new] User ID: ${userId}`);
+
   if (!userId) {
+    console.log(`[claim/new] No userId - returning 400`);
     return res.status(400).send({ error: "Invalid authentication." });
   }
 
   const isWhitelisted = whitelist.includes(userId);
+  console.log(`[claim/new] Is whitelisted: ${isWhitelisted}`);
 
   // Validate Twitter followers (skip for whitelisted users)
   if (!isWhitelisted && session.provider === "twitter") {
@@ -168,13 +186,21 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
   );
   const faucetAddress = process.env.FAUCET_ADDRESS as Address;
 
+  console.log(`[claim/new] Operator address: ${account.address}`);
+  console.log(`[claim/new] Faucet contract: ${faucetAddress}`);
+
   // Generate transaction data (use dripWhitelist for whitelisted users)
+  const functionName = isWhitelisted ? "dripWhitelist" : "drip";
+  console.log(`[claim/new] Using function: ${functionName}`);
   const data = generateTxData(address, isWhitelisted);
 
   // Process drip on main network
+  console.log(`[claim/new] Processing drip on ${mainNetwork.name}...`);
   try {
     await processDrip(account, mainNetwork, data, faucetAddress);
-  } catch (e) {
+    console.log(`[claim/new] Drip successful!`);
+  } catch (e: any) {
+    console.error(`[claim/new] Drip failed: ${e.message || String(e)}`);
     // Rate limit non-whitelisted users on error
     if (!isWhitelisted) {
       await client.set(
@@ -200,9 +226,7 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     );
   }
 
-  if (isWhitelisted) {
-    console.log(`${address} claimed from faucet (whitelisted)`);
-  }
+  console.log(`[claim/new] ${address} claimed from faucet (whitelisted: ${isWhitelisted})`);
 
   return res.status(200).send({ claimed: address, isWhitelisted });
 };
