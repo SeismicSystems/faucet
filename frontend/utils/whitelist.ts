@@ -13,19 +13,16 @@ const SEISMIC_TEAM = [
   "9342524",    // Sam Laferriere (@samlaf)
 ];
 
-// Twitter IDs for whitelist
-const TWITTER_WHITELIST = [
-  "1311531128201916417", // Ameya Deshmukh (@0xameya)
-];
-
-/*
- * DEVELOPERS (2 ETH, 24h cooldown)
- */
-
 // Brookwell team GitHub IDs
 const BROOKWELL_TEAM = [
   "8132955",    // Ravi Riley (@raviriley)
   "51090093",   // Rohan Patra (@rohan-patra)
+];
+
+
+// Twitter IDs for whitelist
+const TWITTER_WHITELIST = [
+  "1311531128201916417", // Ameya Deshmukh (@0xameya)
 ];
 
 // Chainlink team GitHub IDs
@@ -39,6 +36,14 @@ const PIMLICO_TEAM = [
   "97399882",   // mous (@mouseless0x)
 ];
 
+/*
+ * DEVELOPERS (2 ETH, 24h cooldown)
+ */
+const DEVELOPERS = [
+  "158461935", // Dave Thompson (@Davethompson01)
+];
+
+
 // Twitter IDs for developers
 const TWITTER_DEVELOPERS: string[] = [];
 
@@ -49,13 +54,13 @@ const TWITTER_DEVELOPERS: string[] = [];
 // Whitelist: trusted users (10 ETH, no cooldown)
 export const whitelist = [
   ...SEISMIC_TEAM,
+  ...BROOKWELL_TEAM,
+  ...CHAINLINK_TEAM,
+  ...PIMLICO_TEAM,
   ...TWITTER_WHITELIST,
 ];
 
 // Developers: elevated access (2 ETH, 24h cooldown)
 export const developerList = [
-  ...BROOKWELL_TEAM,
-  ...CHAINLINK_TEAM,
-  ...PIMLICO_TEAM,
-  ...TWITTER_DEVELOPERS,
+  ...DEVELOPERS,
 ];
