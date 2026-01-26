@@ -38,6 +38,12 @@ contract SeismicFaucetUser {
         FAUCET.drip(_recipient);
     }
 
+    /// @notice Drips developer amount from faucet to recipient
+    /// @param _recipient to drip to
+    function dripDeveloper(address _recipient) public {
+        FAUCET.dripDeveloper(_recipient);
+    }
+
     /// @notice Drips whitelist amount from faucet to recipient
     /// @param _recipient to drip to
     function dripWhitelist(address _recipient) public {
@@ -68,6 +74,12 @@ contract SeismicFaucetUser {
     /// @param _ethAmount ETH to drip
     function updateDripAmount(uint256 _ethAmount) public {
         FAUCET.updateDripAmount(_ethAmount);
+    }
+
+    /// @notice Updates developer drip amount
+    /// @param _ethAmount ETH to drip to developers
+    function updateDeveloperDripAmount(uint256 _ethAmount) public {
+        FAUCET.updateDeveloperDripAmount(_ethAmount);
     }
 
     /// @notice Updates whitelist drip amount

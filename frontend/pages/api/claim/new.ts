@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { mainNetwork } from "@/utils/networks";
-import { whitelist } from "@/utils/whitelist";
+import { whitelist, developerList } from "@/utils/whitelist";
 
 const MIN_TWITTER_FOLLOWERS = 50;
 const MIN_GITHUB_FOLLOWERS = 10;
@@ -35,10 +35,18 @@ async function postSlackMessage(message: string): Promise<void> {
   });
 }
 
-function generateTxData(recipient: string, isWhitelisted: boolean): `0x${string}` {
+type UserTier = "whitelist" | "developer" | "regular";
+
+function generateTxData(recipient: string, tier: UserTier): `0x${string}` {
+  const functionName = tier === "whitelist" 
+    ? "dripWhitelist" 
+    : tier === "developer" 
+      ? "dripDeveloper" 
+      : "drip";
+  
   return encodeFunctionData({
     abi: seismicFaucetAbi,
-    functionName: isWhitelisted ? "dripWhitelist" : "drip",
+    functionName,
     args: [recipient as Address],
   });
 }
@@ -142,11 +150,14 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     return res.status(400).send({ error: "Invalid authentication." });
   }
 
+  // Determine user tier
   const isWhitelisted = whitelist.includes(userId);
-  console.log(`[claim/new] Is whitelisted: ${isWhitelisted}`);
+  const isDeveloper = developerList.includes(userId);
+  const tier: UserTier = isWhitelisted ? "whitelist" : isDeveloper ? "developer" : "regular";
+  console.log(`[claim/new] User tier: ${tier}`);
 
-  // Validate Twitter followers (skip for whitelisted users)
-  if (!isWhitelisted && session.provider === "twitter") {
+  // Validate Twitter followers (skip for whitelisted and developer users)
+  if (tier === "regular" && session.provider === "twitter") {
     const followerCount = session.twitter_num_followers || 0;
     if (followerCount < MIN_TWITTER_FOLLOWERS) {
       return res.status(403).send({
@@ -155,8 +166,8 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     }
   }
 
-  // Validate GitHub followers (skip for whitelisted users)
-  if (!isWhitelisted && session.provider === "github") {
+  // Validate GitHub followers (skip for whitelisted and developer users)
+  if (tier === "regular" && session.provider === "github") {
     const followerCount = session.github_followers || 0;
     if (followerCount < MIN_GITHUB_FOLLOWERS) {
       return res.status(403).send({
@@ -170,8 +181,8 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     return res.status(400).send({ error: "Invalid address." });
   }
 
-  // Check claim status for non-whitelisted users
-  if (!isWhitelisted) {
+  // Check claim status for non-whitelisted users (developers have 24h cooldown too)
+  if (tier !== "whitelist") {
     const claimed = await hasClaimed(userId, mainNetwork.name);
     if (claimed) {
       return res.status(400).send({
@@ -189,10 +200,10 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
   console.log(`[claim/new] Operator address: ${account.address}`);
   console.log(`[claim/new] Faucet contract: ${faucetAddress}`);
 
-  // Generate transaction data (use dripWhitelist for whitelisted users)
-  const functionName = isWhitelisted ? "dripWhitelist" : "drip";
+  // Generate transaction data based on tier
+  const functionName = tier === "whitelist" ? "dripWhitelist" : tier === "developer" ? "dripDeveloper" : "drip";
   console.log(`[claim/new] Using function: ${functionName}`);
-  const data = generateTxData(address, isWhitelisted);
+  const data = generateTxData(address, tier);
 
   // Process drip on main network
   console.log(`[claim/new] Processing drip on ${mainNetwork.name}...`);
@@ -201,8 +212,8 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     console.log(`[claim/new] Drip successful!`);
   } catch (e: any) {
     console.error(`[claim/new] Drip failed: ${e.message || String(e)}`);
-    // Rate limit non-whitelisted users on error
-    if (!isWhitelisted) {
+    // Rate limit non-whitelisted users on error (includes developers)
+    if (tier !== "whitelist") {
       await client.set(
         `faucet:${mainNetwork.name}:${userId}`,
         "true",
@@ -216,8 +227,8 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     });
   }
 
-  // Set 24h cooldown for non-whitelisted users
-  if (!isWhitelisted) {
+  // Set 24h cooldown for non-whitelisted users (includes developers)
+  if (tier !== "whitelist") {
     await client.set(
       `faucet:${mainNetwork.name}:${userId}`,
       "true",
@@ -226,7 +237,7 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     );
   }
 
-  console.log(`[claim/new] ${address} claimed from faucet (whitelisted: ${isWhitelisted})`);
+  console.log(`[claim/new] ${address} claimed from faucet (tier: ${tier})`);
 
-  return res.status(200).send({ claimed: address, isWhitelisted });
+  return res.status(200).send({ claimed: address, tier });
 };

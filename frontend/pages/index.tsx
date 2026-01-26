@@ -11,7 +11,7 @@ import { signIn, signOut } from "next-auth/react"; // Auth
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { mainNetwork } from "@/utils/networks";
-import { whitelist } from "@/utils/whitelist";
+import { whitelist, developerList } from "@/utils/whitelist";
 
 export default function Home({
   session,
@@ -46,9 +46,12 @@ export default function Home({
     try {
       // Post new claim with recipient address
       const response = await axios.post("/api/claim/new", { address });
-      // Toast if success + toggle claimed
-      if (response.data.isWhitelisted) {
+      // Toast if success + toggle claimed based on tier
+      const tier = response.data.tier;
+      if (tier === "whitelist") {
         toast.success("You are whitelisted!! 🎉 Dripping 10 ETH...");
+      } else if (tier === "developer") {
+        toast.success("Developer access! 🛠️ Dripping 2 ETH...");
       } else {
         toast.success("Tokens dispersed—check balances shortly!");
       }

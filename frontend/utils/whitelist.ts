@@ -1,6 +1,10 @@
+/*
+ * WHITELIST (Trusted - 10 ETH, no cooldown)
+ */
+
 // Seismic team GitHub IDs
 const SEISMIC_TEAM = [
-  // "74180822",   // Ameya Deshmukh (@ameya-deshmukh)
+  "74180822",   // Ameya Deshmukh (@ameya-deshmukh)
   "1449882",    // Christian Drappi (@cdrappi)
   "25928722",   // Matthias Wright (@matthias-wright)
   "71679972",   // Dalton Coder (@daltoncoder)
@@ -8,6 +12,15 @@ const SEISMIC_TEAM = [
   "57149625",   // Matt Haines (@mHaines9219)
   "9342524",    // Sam Laferriere (@samlaf)
 ];
+
+// Twitter IDs for whitelist
+const TWITTER_WHITELIST = [
+  "1311531128201916417", // Ameya Deshmukh (@0xameya)
+];
+
+/*
+ * DEVELOPERS (2 ETH, 24h cooldown)
+ */
 
 // Brookwell team GitHub IDs
 const BROOKWELL_TEAM = [
@@ -18,23 +31,31 @@ const BROOKWELL_TEAM = [
 // Chainlink team GitHub IDs
 const CHAINLINK_TEAM = [
   "2430254",    // Todor Karaivanov (@tkaraivanov)
-  "164586642", // Felix Medina (@femedmad)
+  "164586642",  // Felix Medina (@femedmad)
 ];
 
 // Pimlico team GitHub IDs
 const PIMLICO_TEAM = [
-  "97399882",    // mous (@mouseless0x)
+  "97399882",   // mous (@mouseless0x)
 ];
 
-// Twitter IDs (separate since they're a different provider)
-const TWITTER_WHITELIST = [
-  "1311531128201916417", // Ameya Deshmukh (@0xameya)
-];
+// Twitter IDs for developers
+const TWITTER_DEVELOPERS: string[] = [];
 
+/*
+ * EXPORTS
+ */
+
+// Whitelist: trusted users (10 ETH, no cooldown)
 export const whitelist = [
   ...SEISMIC_TEAM,
+  ...TWITTER_WHITELIST,
+];
+
+// Developers: elevated access (2 ETH, 24h cooldown)
+export const developerList = [
   ...BROOKWELL_TEAM,
   ...CHAINLINK_TEAM,
   ...PIMLICO_TEAM,
-  ...TWITTER_WHITELIST,
+  ...TWITTER_DEVELOPERS,
 ];
