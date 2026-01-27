@@ -36,6 +36,11 @@ const PIMLICO_TEAM = [
   "97399882",   // mous (@mouseless0x)
 ];
 
+// Ankr team Github IDs
+const ANKR_TEAM = [
+  "24973480", // Finn (@guiltylotus)
+];
+
 /*
  * DEVELOPERS (2 ETH, 24h cooldown)
  */
@@ -57,6 +62,7 @@ export const whitelist = [
   ...BROOKWELL_TEAM,
   ...CHAINLINK_TEAM,
   ...PIMLICO_TEAM,
+  ...ANKR_TEAM,
   ...TWITTER_WHITELIST,
 ];
 
