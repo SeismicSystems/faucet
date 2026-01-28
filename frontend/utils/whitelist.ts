@@ -39,6 +39,8 @@ const PIMLICO_TEAM = [
 // Ankr team Github IDs
 const ANKR_TEAM = [
   "24973480", // Finn (@guiltylotus)
+  "165103466" // Felip (@fr-automator)
+
 ];
 
 /*
