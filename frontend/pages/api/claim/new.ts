@@ -18,11 +18,11 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { mainNetwork } from "@/utils/networks";
 import { whitelist, developerList } from "@/utils/whitelist";
-import { getDiscordMagnitude } from "@/utils/discord";
+// import { getDiscordMagnitude } from "@/utils/discord";
 
 const MIN_TWITTER_FOLLOWERS = 50;
 const MIN_GITHUB_FOLLOWERS = 10;
-const MIN_DISCORD_MAGNITUDE = 5;
+// const MIN_DISCORD_MAGNITUDE = 5;
 
 // Setup redis and slack clients
 const client = new Redis(process.env.REDIS_URL as string);
@@ -185,20 +185,20 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     }
   }
 
-  // Validate Discord role (skip for whitelisted and developer users)
-  if (tier === "regular" && session.provider === "discord") {
-    const magnitude = await getDiscordMagnitude(session.discord_id!);
-    if (magnitude === null) {
-      return res.status(403).send({
-        error: "You must be a member of the Seismic Discord server to claim.",
-      });
-    }
-    if (magnitude < MIN_DISCORD_MAGNITUDE) {
-      return res.status(403).send({
-        error: `Minimum magnitude of ${MIN_DISCORD_MAGNITUDE} required. Your magnitude is ${magnitude}.`,
-      });
-    }
-  }
+  // // Validate Discord role (skip for whitelisted and developer users)
+  // if (tier === "regular" && session.provider === "discord") {
+  //   const magnitude = await getDiscordMagnitude(session.discord_id!);
+  //   if (magnitude === null) {
+  //     return res.status(403).send({
+  //       error: "You must be a member of the Seismic Discord server to claim.",
+  //     });
+  //   }
+  //   if (magnitude < MIN_DISCORD_MAGNITUDE) {
+  //     return res.status(403).send({
+  //       error: `Minimum magnitude of ${MIN_DISCORD_MAGNITUDE} required. Your magnitude is ${magnitude}.`,
+  //     });
+  //   }
+  // }
 
   // Validate address
   if (!address || !isAddress(address)) {
