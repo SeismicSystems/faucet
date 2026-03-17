@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.30;
 
 /// ============ Imports ============
 
@@ -18,7 +18,7 @@ contract DSTestExtended is DSTest {
         address param,
         string memory message
     ) internal {
-        try erroringFunction(param) { 
+        try erroringFunction(param) {
             fail();
         } catch Error(string memory error) {
             // Assert revert error matches expected message
@@ -37,7 +37,24 @@ contract DSTestExtended is DSTest {
         bool _bool,
         string memory message
     ) internal {
-        try erroringFunction(_addr, _bool) { 
+        try erroringFunction(_addr, _bool) {
+            fail();
+        } catch Error(string memory error) {
+            // Assert revert error matches expected message
+            assertEq(error, message);
+        }
+    }
+
+    /// @notice Calls function and checks for matching revert message
+    /// @param erroringFunction to call
+    /// @param param uint256 to pass to function
+    /// @param message to check against revert error string
+    function assertErrorFunctionWithUint256(
+        function(uint256) external erroringFunction,
+        uint256 param,
+        string memory message
+    ) internal {
+        try erroringFunction(param) {
             fail();
         } catch Error(string memory error) {
             // Assert revert error matches expected message

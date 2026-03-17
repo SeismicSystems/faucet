@@ -25,11 +25,8 @@ body {
   min-height: 100vh;
   min-width: 100vw;
   background-color: rgb(246, 246, 247);
-  background: linear-gradient(
-        90deg,
-        $bg-color ($dot-space - $dot-size),
-        transparent 1%
-      )
+  background:
+    linear-gradient(90deg, $bg-color ($dot-space - $dot-size), transparent 1%)
       center,
     linear-gradient($bg-color ($dot-space - $dot-size), transparent 1%) center,
     $bg-dot-color;

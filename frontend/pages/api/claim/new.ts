@@ -1,271 +1,272 @@
-import Redis from "ioredis"; // Redis
-import { ethers } from "ethers"; // Ethers
-import { WebClient } from "@slack/web-api"; // Slack
-import { isValidInput } from "pages/index"; // Address check
-import parseTwitterDate from "utils/dates"; // Parse Twitter dates
-import { getSession } from "next-auth/client"; // Session management
-import { hasClaimed } from "pages/api/claim/status"; // Claim status
-import type { NextApiRequest, NextApiResponse } from "next"; // Types
+import Redis from "ioredis";
+import { WebClient } from "@slack/web-api";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { hasClaimed } from "@/pages/api/claim/status";
+import type { NextApiRequest, NextApiResponse } from "next";
 
-// Setup whitelist (Anish)
-const whitelist: string[] = ["1078014622525988864"];
+import { seismicFaucetAbi } from "@/utils/contract";
+import {
+  Address,
+  encodeFunctionData,
+  createPublicClient,
+  createWalletClient,
+  Chain,
+  http,
+  isAddress,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { mainNetwork } from "@/utils/networks";
+import { whitelist, developerList } from "@/utils/whitelist";
+// import { getDiscordMagnitude } from "@/utils/discord";
 
-// Setup redis client
-const client = new Redis(process.env.REDIS_URL);
+const MIN_TWITTER_FOLLOWERS = 50;
+const MIN_GITHUB_FOLLOWERS = 10;
+// const MIN_DISCORD_MAGNITUDE = 5;
 
-// Setup slack client
+// Setup redis and slack clients
+const client = new Redis(process.env.REDIS_URL as string);
 const slack = new WebClient(process.env.SLACK_ACCESS_TOKEN);
-const slackChannel: string = process.env.SLACK_CHANNEL ?? "";
-/**
- * Post message to slack channel
- * @param {string} message to post
- */
+const slackChannel = process.env.SLACK_CHANNEL ?? "";
+
 async function postSlackMessage(message: string): Promise<void> {
   await slack.chat.postMessage({
     channel: slackChannel,
     text: message,
-    // Ping user on error
     link_names: true,
   });
 }
 
-/**
- * Generate Alchemy RPC endpoint url from partials
- * @param {string} partial of network
- * @returns {string} full rpc url
- */
-function generateAlchemy(partial: string): string {
-  // Combine partial + API key
-  return `https://${partial}/v2/${process.env.ALCHEMY_API_KEY}`;
+type UserTier = "whitelist" | "developer" | "regular";
+
+function generateTxData(recipient: string, tier: UserTier): `0x${string}` {
+  const functionName =
+    tier === "whitelist"
+      ? "dripWhitelist"
+      : tier === "developer"
+        ? "dripDeveloper"
+        : "drip";
+
+  return encodeFunctionData({
+    abi: seismicFaucetAbi,
+    functionName,
+    args: [recipient as Address],
+  });
 }
 
-// Setup networks
-const ARBITRUM: number = 421611;
-const mainRpcNetworks: Record<number, string> = {
-  //3: generateAlchemy("eth-ropsten.alchemyapi.io"),
-  4: generateAlchemy("eth-rinkeby.alchemyapi.io"),
-  5: generateAlchemy("eth-goerli.alchemyapi.io"),
-  42: generateAlchemy("eth-kovan.alchemyapi.io"),
-};
-const secondaryRpcNetworks: Record<number, string> = {
-  69: generateAlchemy("opt-kovan.g.alchemy.com"),
-  //1287: "https://rpc.api.moonbase.moonbeam.network",
-  80001: generateAlchemy("polygon-mumbai.g.alchemy.com"),
-  421611: generateAlchemy("arb-rinkeby.g.alchemy.com"),
-  //43113: "https://api.avax-test.network/ext/bc/C/rpc",
-};
+async function getNonceForChain(
+  chain: Chain,
+  operatorAddress: Address,
+): Promise<number> {
+  const cacheKey = `nonce-${chain.name}`;
+  const cachedNonce = await client.get(cacheKey);
 
-// Setup faucet interface
-const iface = new ethers.utils.Interface([
-  "function drip(address _recipient) external",
-]);
-
-/**
- * Generates tx input data for drip claim
- * @param {string} recipient address
- * @returns {string} encoded input data
- */
-function generateTxData(recipient: string): string {
-  // Encode address for drip function
-  return iface.encodeFunctionData("drip", [recipient]);
-}
-
-/**
- * Collects StaticJsonRpcProvider by network
- * @param {number} network id
- * @returns {ethers.providers.StaticJsonRpcProvider} provider
- */
-function getProviderByNetwork(
-  network: number
-): ethers.providers.StaticJsonRpcProvider {
-  // Collect all RPC URLs
-  const rpcNetworks = { ...mainRpcNetworks, ...secondaryRpcNetworks };
-  // Collect alchemy RPC URL
-  const rpcUrl = rpcNetworks[network];
-  // Return static provider
-  return new ethers.providers.StaticJsonRpcProvider(rpcUrl);
-}
-
-/**
- * Collects nonce by network (cache first)
- * @param {number} network id
- * @returns {Promise<number>} network account nonce
- */
-async function getNonceByNetwork(network: number): Promise<number> {
-  // Collect nonce from redis
-  const redisNonce: string | null = await client.get(`nonce-${network}`);
-
-  // If no redis nonce
-  if (redisNonce == null) {
-    // Update to last network nonce
-    const provider = getProviderByNetwork(network);
-    return await provider.getTransactionCount(
-      // Collect nonce for operator
-      process.env.NEXT_PUBLIC_OPERATOR_ADDRESS ?? ""
-    );
-  } else {
-    // Else, return cached nonce
-    return Number(redisNonce);
+  if (cachedNonce !== null) {
+    return Number(cachedNonce);
   }
+
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(),
+  });
+
+  return await publicClient.getTransactionCount({ address: operatorAddress });
 }
 
-/**
- * Returns populated drip transaction for a network
- * @param {ethers.Wallet} wallet without RPC network connected
- * @param {number} network id
- * @param {string} data input for tx
- */
 async function processDrip(
-  wallet: ethers.Wallet,
-  network: number,
-  data: string
+  account: ReturnType<typeof privateKeyToAccount>,
+  chain: Chain,
+  data: `0x${string}`,
+  faucetAddress: Address,
 ): Promise<void> {
-  // Collect provider
-  const provider = getProviderByNetwork(network);
+  console.log(`[processDrip] Starting drip on chain: ${chain.name}`);
+  console.log(`[processDrip] Faucet address: ${faucetAddress}`);
+  console.log(`[processDrip] TX data: ${data}`);
 
-  // Connect wallet to network
-  const rpcWallet = wallet.connect(provider);
-  // Collect nonce for network
-  const nonce = await getNonceByNetwork(network);
-  // Collect gas price * 2 for network
-  const gasPrice = (await provider.getGasPrice()).mul(2);
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(),
+  });
 
-  // Update nonce for network in redis w/ 5m ttl
-  await client.set(`nonce-${network}`, nonce + 1, "EX", 300);
+  const walletClient = createWalletClient({
+    account,
+    chain,
+    transport: http(),
+  });
 
-  // Return populated transaction
+  const nonce = await getNonceForChain(chain, account.address);
+  const gasPrice = await publicClient.getGasPrice();
+
+  console.log(`[processDrip] Nonce: ${nonce}, Gas price: ${gasPrice}`);
+
+  // Update nonce in redis with 5m TTL
+  await client.set(`nonce-${chain.name}`, nonce + 1, "EX", 300);
+
   try {
-    await rpcWallet.sendTransaction({
-      to: process.env.FAUCET_ADDRESS ?? "",
-      from: wallet.address,
-      gasPrice,
-      // Custom gas override for Arbitrum w/ min gas limit
-      gasLimit: network === ARBITRUM ? 5_000_000 : 500_000,
+    console.log(`[processDrip] Sending transaction...`);
+    const txHash = await walletClient.sendTransaction({
+      to: faucetAddress,
       data,
+      gasPrice: gasPrice * BigInt(2),
+      gas: BigInt(500_000),
       nonce,
-      type: 0,
     });
-  } catch (e) {
-    await postSlackMessage(
-      `@anish Error dripping for ${provider.network.chainId}, ${String(
-        (e as any).reason
-      )}`
-    );
+    console.log(`[processDrip] Transaction sent! Hash: ${txHash}`);
+  } catch (e: any) {
+    console.error(`[processDrip] ERROR: ${e.message || String(e)}`);
+    const errorMsg = `Error dripping for ${chain.name}: ${e.message || String(e)}`;
+    await postSlackMessage(errorMsg);
 
-    // Delete nonce key to attempt at self-heal
-    const delStatus: number = await client.del(
-      `nonce-${provider.network.chainId}`
-    );
-    await postSlackMessage(`Attempting self heal: ${delStatus}`);
+    // Attempt self-heal by clearing nonce
+    await client.del(`nonce-${chain.name}`);
+    await postSlackMessage(`Attempting self heal for ${chain.name}`);
 
-    // Throw error
-    throw new Error(`Error when processing drip for network ${network}`);
+    throw new Error(`Error when processing drip for ${chain.name}`);
   }
 }
 
 export default async (req: NextApiRequest, res: NextApiResponse) => {
-  // Collect session (force any for extra twitter params)
-  const session: any = await getSession({ req });
-  // Collect address
+  console.log(`[claim/new] === New claim request ===`);
+  const session: any = await getServerSession(req, res, authOptions);
   const { address, others }: { address: string; others: boolean } = req.body;
 
+  console.log(`[claim/new] Address: ${address}`);
+  console.log(`[claim/new] Session provider: ${session?.provider}`);
+
   if (!session) {
-    // Return unauthed status
+    console.log(`[claim/new] No session - returning 401`);
     return res.status(401).send({ error: "Not authenticated." });
   }
 
-  // Basic anti-bot measures
-  const ONE_MONTH_SECONDS = 2629746;
-  if (
-    // Less than 1 tweet
-    session.twitter_num_tweets == 0 ||
-    // Less than 15 followers
-    session.twitter_num_followers < 15 ||
-    // Less than 1 month old
-    new Date().getTime() -
-      parseTwitterDate(session.twitter_created_at).getTime() <
-      ONE_MONTH_SECONDS
-  ) {
-    // Return invalid Twitter account status
-    return res
-      .status(400)
-      .send({ error: "Twitter account does not pass anti-bot checks." });
+  // Validate authentication provider
+  const userId =
+    session.provider === "twitter"
+      ? session.twitter_id
+      : session.provider === "github"
+        ? session.github_id
+        : session.provider === "discord"
+          ? session.discord_id
+          : null;
+
+  console.log(`[claim/new] User ID: ${userId}`);
+
+  if (!userId) {
+    console.log(`[claim/new] No userId - returning 400`);
+    return res.status(400).send({ error: "Invalid authentication." });
   }
 
-  if (!address || !isValidInput(address)) {
-    // Return invalid address status
+  // Determine user tier
+  const isWhitelisted = whitelist.includes(userId);
+  const isDeveloper = developerList.includes(userId);
+  const tier: UserTier = isWhitelisted
+    ? "whitelist"
+    : isDeveloper
+      ? "developer"
+      : "regular";
+  console.log(`[claim/new] User tier: ${tier}`);
+
+  // Validate Twitter followers (skip for whitelisted and developer users)
+  if (tier === "regular" && session.provider === "twitter") {
+    const followerCount = session.twitter_num_followers || 0;
+    if (followerCount < MIN_TWITTER_FOLLOWERS) {
+      return res.status(403).send({
+        error: `Minimum ${MIN_TWITTER_FOLLOWERS} Twitter followers required. You have ${followerCount}.`,
+      });
+    }
+  }
+
+  // Validate GitHub followers (skip for whitelisted and developer users)
+  if (tier === "regular" && session.provider === "github") {
+    const followerCount = session.github_followers || 0;
+    if (followerCount < MIN_GITHUB_FOLLOWERS) {
+      return res.status(403).send({
+        error: `Minimum ${MIN_GITHUB_FOLLOWERS} GitHub followers required. You have ${followerCount}.`,
+      });
+    }
+  }
+
+  // // Validate Discord role (skip for whitelisted and developer users)
+  // if (tier === "regular" && session.provider === "discord") {
+  //   const magnitude = await getDiscordMagnitude(session.discord_id!);
+  //   if (magnitude === null) {
+  //     return res.status(403).send({
+  //       error: "You must be a member of the Seismic Discord server to claim.",
+  //     });
+  //   }
+  //   if (magnitude < MIN_DISCORD_MAGNITUDE) {
+  //     return res.status(403).send({
+  //       error: `Minimum magnitude of ${MIN_DISCORD_MAGNITUDE} required. Your magnitude is ${magnitude}.`,
+  //     });
+  //   }
+  // }
+
+  // Validate address
+  if (!address || !isAddress(address)) {
     return res.status(400).send({ error: "Invalid address." });
   }
 
-  // Collect address
-  let addr: string = address;
-  // If address is ENS name
-  if (~address.toLowerCase().indexOf(".eth")) {
-    // Setup custom mainnet provider
-    const provider = new ethers.providers.StaticJsonRpcProvider(
-      `https://eth-mainnet.alchemyapi.io/v2/${process.env.ALCHEMY_API_KEY}`
+  // Check claim status for non-whitelisted users (developers have 24h cooldown too)
+  if (tier !== "whitelist") {
+    const claimed = await hasClaimed(userId, mainNetwork.name);
+    if (claimed) {
+      return res.status(400).send({
+        error: "Already claimed in 24h window",
+      });
+    }
+  }
+
+  // Create account from private key
+  const account = privateKeyToAccount(
+    process.env.FAUCET_PRIVATE_KEY as `0x${string}`,
+  );
+  const faucetAddress = process.env.FAUCET_ADDRESS as Address;
+
+  console.log(`[claim/new] Operator address: ${account.address}`);
+  console.log(`[claim/new] Faucet contract: ${faucetAddress}`);
+
+  // Generate transaction data based on tier
+  const functionName =
+    tier === "whitelist"
+      ? "dripWhitelist"
+      : tier === "developer"
+        ? "dripDeveloper"
+        : "drip";
+  console.log(`[claim/new] Using function: ${functionName}`);
+  const data = generateTxData(address, tier);
+
+  // Process drip on main network
+  console.log(`[claim/new] Processing drip on ${mainNetwork.name}...`);
+  try {
+    await processDrip(account, mainNetwork, data, faucetAddress);
+    console.log(`[claim/new] Drip successful!`);
+  } catch (e: any) {
+    console.error(`[claim/new] Drip failed: ${e.message || String(e)}`);
+    // Rate limit non-whitelisted users on error (includes developers)
+    if (tier !== "whitelist") {
+      await client.set(
+        `faucet:${mainNetwork.name}:${userId}`,
+        "true",
+        "EX",
+        900,
+      ); // 15 min cooldown
+    }
+
+    return res.status(500).send({
+      error: "Error claiming, try again in 15 minutes.",
+    });
+  }
+
+  // Set 24h cooldown for non-whitelisted users (includes developers)
+  if (tier !== "whitelist") {
+    await client.set(
+      `faucet:${mainNetwork.name}:${userId}`,
+      "true",
+      "EX",
+      86400,
     );
-
-    // Collect 0x address from ENS
-    const resolvedAddress = await provider.resolveName(address);
-
-    // If no resolver set
-    if (!resolvedAddress) {
-      // Return invalid ENS status
-      return res
-        .status(400)
-        .send({ error: "Invalid ENS name. No reverse record." });
-    }
-
-    // Else, set address
-    addr = resolvedAddress;
   }
 
-  const claimed: boolean = await hasClaimed(session.twitter_id);
-  if (claimed) {
-    // Return already claimed status
-    return res.status(400).send({ error: "Already claimed in 24h window" });
-  }
+  console.log(`[claim/new] ${address} claimed from faucet (tier: ${tier})`);
 
-  // Setup wallet w/o RPC provider
-  const wallet = new ethers.Wallet(process.env.OPERATOR_PRIVATE_KEY ?? "");
-
-  // Generate transaction data
-  const data: string = generateTxData(addr);
-
-  // Networks to claim on (based on others toggle)
-  const otherNetworks: Record<number, string> = others
-    ? secondaryRpcNetworks
-    : {};
-  const claimNetworks: Record<number, string> = {
-    ...mainRpcNetworks,
-    ...otherNetworks,
-  };
-
-  // For each main network
-  for (const networkId of Object.keys(claimNetworks)) {
-    try {
-      // Process faucet claims
-      await processDrip(wallet, Number(networkId), data);
-    } catch (e) {
-      // If not whitelisted, force user to wait 15 minutes
-      if (!whitelist.includes(session.twitter_id)) {
-        // Update 24h claim status
-        await client.set(session.twitter_id, "true", "EX", 900);
-      }
-
-      // If error in process, revert
-      return res
-        .status(500)
-        .send({ error: "Error fully claiming, try again in 15 minutes." });
-    }
-  }
-
-  // If not whitelisted
-  if (!whitelist.includes(session.twitter_id)) {
-    // Update 24h claim status
-    await client.set(session.twitter_id, "true", "EX", 86400);
-  }
-
-  return res.status(200).send({ claimed: address });
+  return res.status(200).send({ claimed: address, tier });
 };

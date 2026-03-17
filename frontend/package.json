@@ -1,32 +1,39 @@
 {
-  "name": "multifaucet",
-  "author": "Anish Agnihotri",
+  "name": "seismic-faucet",
+  "author": "Seismic Systems",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "dev": "bun run next dev",
+    "build": "bun run next build",
+    "start": "bun run next start",
+    "lint": "bun run next lint",
+    "contracts:compile": "bun run --cwd ../contracts sforge build",
+    "contracts:test": "bun run --cwd ../contracts sforge test",
+    "contracts:deploy": "source .env && RPC_URL=$RPC_URL FAUCET_PRIVATE_KEY=$FAUCET_PRIVATE_KEY FAUCET_RESERVE_PRIVATE_KEY=$FAUCET_RESERVE_PRIVATE_KEY bun run --cwd ../contracts sforge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast --private-key $FAUCET_PRIVATE_KEY"
   },
   "dependencies": {
-    "@slack/web-api": "^6.5.1",
-    "axios": "^0.24.0",
-    "ethers": "^5.4.7",
-    "ioredis": "^4.28.0",
-    "next": "^12.0.4",
-    "next-auth": "^3.29.0",
-    "react": "17.0.2",
-    "react-dom": "17.0.2",
-    "react-toastify": "^8.0.3",
-    "sass": "^1.42.1"
+    "@slack/web-api": "^7.10.0",
+    "axios": "^1.7.9",
+    "ioredis": "^5.4.2",
+    "next": "^14.2.23",
+    "next-auth": "^4.24.11",
+    "prettier": "^3.6.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-toastify": "^11.0.2",
+    "sass": "^1.83.0",
+    "seismic-viem": "1.1.0",
+    "viem": "^2.40.2"
   },
   "devDependencies": {
-    "@types/ioredis": "^4.27.7",
-    "@types/react": "17.0.26",
-    "eslint": "7.32.0",
-    "eslint-config-next": "11.1.2",
-    "typescript": "4.4.3"
+    "@types/ioredis": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.23",
+    "typescript": "^5.7.2"
   }
 }
