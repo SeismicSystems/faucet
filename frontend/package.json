@@ -27,6 +27,9 @@
     "seismic-viem": "1.1.0",
     "viem": "^2.40.2"
   },
+  "overrides": {
+    "axios": "1.13.2"
+  },
   "devDependencies": {
     "@types/ioredis": "^5.0.0",
     "@types/node": "^22.10.2",
