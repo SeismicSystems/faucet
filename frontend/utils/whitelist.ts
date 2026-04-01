@@ -41,6 +41,11 @@ const ANKR_TEAM = [
   "165103466", // Felip (@fr-automator)
 ];
 
+// Fireblocks team GitHub IDs
+const FIREBLOCKS_TEAM = [
+  "207824728", // Tomer Shoham (@tomer-shoham)
+];
+
 /*
  * DEVELOPERS (2 ETH, 24h cooldown)
  */
@@ -68,6 +73,7 @@ export const whitelist = [
   ...CHAINLINK_TEAM,
   ...PIMLICO_TEAM,
   ...ANKR_TEAM,
+  ...FIREBLOCKS_TEAM,
   ...TWITTER_WHITELIST,
   ...DISCORD_WHITELIST,
 ];
