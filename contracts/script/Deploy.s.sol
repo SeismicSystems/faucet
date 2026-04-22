@@ -12,7 +12,11 @@ contract DeployScript is Script {
     function run() external {
         // Faucet account (also the SUSDC admin — must pre-mint SUSDC to itself before running this script)
         uint256 faucetPrivateKey = vm.envUint("FAUCET_PRIVATE_KEY");
+
+        // Reserve account
         uint256 reservePrivateKey = vm.envUint("FAUCET_RESERVE_PRIVATE_KEY");
+
+        // SUSDC (SRC20) token address
         address susdcAddress = vm.envAddress("SUSDC_ADDRESS");
 
         address reserveAccount = vm.addr(reservePrivateKey);

@@ -3,10 +3,10 @@ pragma solidity ^0.8.30;
 
 /// ============ Imports ============
 
-import "./DSTestExtended.sol";
-import "./SeismicFaucetUser.sol";
-import "./MockSUSDC.sol";
-import "../../SeismicFaucet.sol";
+import "./DSTestExtended.sol"; // DSTestExtended
+import "./SeismicFaucetUser.sol"; // Faucet user
+import "./MockSUSDC.sol"; // Mock SUSDC token
+import "../../SeismicFaucet.sol"; // SeismicFaucet
 
 contract SeismicFaucetTest is DSTestExtended {
     /// @dev Faucet funding amount in tests (6 decimals)
@@ -26,15 +26,20 @@ contract SeismicFaucetTest is DSTestExtended {
     /// ============ Setup test suite ============
 
     function setUp() public virtual {
+        // Deploy mock SUSDC
         SUSDC = new MockSUSDC();
+
+        // Create faucet
         FAUCET = new SeismicFaucet(address(SUSDC));
 
-        // Seed faucet with SUSDC
+        // Fund faucet with SUSDC (test admin mints directly to faucet)
         SUSDC.mint(address(FAUCET), suint256(FAUCET_SEED));
 
+        // Setup faucet users
         ALICE = new SeismicFaucetUser(FAUCET);
         BOB = new SeismicFaucetUser(FAUCET);
 
+        // Make Alice superOperator
         FAUCET.updateSuperOperator(address(ALICE), true);
     }
 }
