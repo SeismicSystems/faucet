@@ -3,14 +3,19 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
 import "../src/SeismicFaucet.sol";
-import {ISRC20} from "seismic-std-lib/interfaces/ISRC20.sol";
+
+/// @notice Minimal local interface for the SUSDC admin-mint entry point.
+/// @dev SRC20 does not expose mint publicly; SUSDC adds `mint(address, suint256)` gated to admin.
+interface ISUSDCMintable {
+    function mint(address to, suint256 amount) external;
+}
 
 contract DeployScript is Script {
     /// @notice SUSDC to seed the faucet contract with (6 decimals)
     uint256 constant INITIAL_FAUCET_SEED = 1_000_000e6; // 1,000,000 SUSDC
 
     function run() external {
-        // Faucet account (also the SUSDC admin — must pre-mint SUSDC to itself before running this script)
+        // Faucet account (also the SUSDC admin — mints directly into the faucet contract below)
         uint256 faucetPrivateKey = vm.envUint("FAUCET_PRIVATE_KEY");
 
         // Reserve account
@@ -29,11 +34,8 @@ contract DeployScript is Script {
         faucet.updateSuperOperator(reserveAccount, true);
         faucet.updateApprovedOperator(faucetAccount, true);
 
-        // Seed the faucet with SUSDC from the operator's balance
-        require(
-            ISRC20(susdcAddress).transfer(address(faucet), suint256(INITIAL_FAUCET_SEED)),
-            "Failed seeding faucet with SUSDC"
-        );
+        // Seed the faucet with SUSDC by admin-minting directly into it (no self-transfer round-trip)
+        ISUSDCMintable(susdcAddress).mint(address(faucet), suint256(INITIAL_FAUCET_SEED));
 
         vm.stopBroadcast();
 
