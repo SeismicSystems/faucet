@@ -1,0 +1,39 @@
+{
+  "name": "seismic-faucet-community",
+  "author": "Seismic Systems",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "bun run next dev -p 3001",
+    "build": "bun run next build",
+    "start": "bun run next start -p 3001",
+    "lint": "bun run next lint"
+  },
+  "dependencies": {
+    "@slack/web-api": "^7.10.0",
+    "axios": "^1.7.9",
+    "ioredis": "^5.4.2",
+    "next": "^14.2.23",
+    "next-auth": "^4.24.11",
+    "prettier": "^3.6.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-toastify": "^11.0.2",
+    "sass": "^1.83.0",
+    "seismic-viem": "1.1.0",
+    "viem": "^2.40.2"
+  },
+  "overrides": {
+    "axios": "1.13.2"
+  },
+  "devDependencies": {
+    "@types/ioredis": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.23",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,268 @@
+import axios from "axios"; // Requests
+import Image from "next/image"; // Image
+import { isAddress } from "viem";
+import { toast } from "react-toastify"; // Toast notifications
+import Layout from "@/components/Layout"; // Layout wrapper
+import { useRouter } from "next/router"; // Router
+import styles from "@/styles/Home.module.scss"; // Styles
+import { ReactElement, useState } from "react"; // Local state + types
+import { hasClaimed } from "@/pages/api/claim/status"; // Claim status
+import { signIn, signOut } from "next-auth/react"; // Auth
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { mainNetwork } from "@/utils/networks";
+import { whitelist, developerList } from "@/utils/whitelist";
+
+export default function Home({
+  session,
+  claimed: initialClaimed,
+}: {
+  session: any;
+  claimed: boolean;
+}) {
+  // Collect prefilled address
+  const {
+    query: { addr },
+  } = useRouter();
+  // Fill prefilled address
+  const prefilledAddress: string = addr && typeof addr === "string" ? addr : "";
+
+  // Claim address
+  const [address, setAddress] = useState<string>(prefilledAddress);
+  // Claimed status
+  const [claimed, setClaimed] = useState<boolean>(initialClaimed);
+  // First claim
+  const [firstClaim, setFirstClaim] = useState<boolean>(false);
+  // Loading status
+  const [loading, setLoading] = useState<boolean>(false);
+
+  /**
+   * Processes a claim to the faucet
+   */
+  const processClaim = async () => {
+    // Toggle loading
+    setLoading(true);
+
+    try {
+      // Post new claim with recipient address
+      const response = await axios.post("/api/claim/new", { address });
+      // Toast if success + toggle claimed based on tier
+      const tier = response.data.tier;
+      if (tier === "whitelist") {
+        toast.success("You are whitelisted!! 🎉 Dripping 250 SUSDC...");
+      } else if (tier === "developer") {
+        toast.success("Developer access! 🛠️ Dripping 50 SUSDC...");
+      } else {
+        toast.success("SUSDC dispersed—check balances shortly!");
+      }
+      setClaimed(true);
+      setFirstClaim(true);
+    } catch (error: any) {
+      // If error, toast error message
+      toast.error(error.response.data.error);
+    }
+
+    // Toggle loading
+    setLoading(false);
+  };
+
+  return (
+    <Layout>
+      {/* CTA + description */}
+      <div className={styles.home__cta}>
+        <div>
+          <a
+            href="https://seismic.systems"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Image
+              src="/seismiclogo.png"
+              alt="Seismic Logo"
+              width={200}
+              height={58}
+            />
+          </a>
+        </div>
+        <h1>Bootstrap your testnet/devnet wallet</h1>
+        <span>This faucet funds your Seismic testnet/devnet wallet.</span>
+      </div>
+
+      {/* Claim from facuet card */}
+      <div className={styles.home__card}>
+        {/* Card title */}
+        <div className={styles.home__card_title}>
+          <h3>Request Tokens</h3>
+        </div>
+
+        {/* Card content */}
+        <div className={styles.home__card_content}>
+          {!session ? (
+            // If user is unauthenticated:
+            <div className={styles.content__unauthenticated}>
+              {/* Reasoning for OAuth */}
+              <p>
+                To prevent faucet botting, you must sign in with Discord. We
+                request read-only access to verify your server membership and
+                magnitude role.
+              </p>
+
+              {/* Sign in buttons */}
+              <div
+                style={{
+                  display: "flex",
+                  gap: "10px",
+                  flexDirection: "column",
+                }}
+              >
+                <button
+                  className={styles.button__main}
+                  onClick={() => signIn("discord")}
+                >
+                  Sign In with Discord
+                </button>
+              </div>
+            </div>
+          ) : (
+            // If user is authenticated:
+            <div className={styles.content__authenticated}>
+              {claimed ? (
+                // If user has already claimed once in 24h
+                <div className={styles.content__claimed}>
+                  <p>
+                    {firstClaim
+                      ? "You have successfully claimed tokens. You can request again in 24 hours."
+                      : "You have already claimed tokens today. Please try again in 24 hours."}
+                  </p>
+
+                  <input
+                    type="text"
+                    placeholder="0x478669bb3846d79f2ff511ce99eaee8f85554476"
+                    disabled
+                  />
+                  <button className={styles.button__main} disabled>
+                    Tokens Already Claimed
+                  </button>
+                </div>
+              ) : (
+                // If user has not claimed in 24h
+                <div className={styles.content__unclaimed}>
+                  {/* Claim description */}
+                  <p>
+                    Enter your Seismic testnet/devnet address to receive tokens:
+                  </p>
+
+                  {/* Address input */}
+                  <input
+                    type="text"
+                    placeholder="0x478669bb3846d79f2ff511ce99eaee8f85554476"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                  />
+
+                  {isAddress(address) ? (
+                    // If address is valid, allow claiming
+                    <button
+                      className={styles.button__main}
+                      onClick={processClaim}
+                      disabled={loading}
+                    >
+                      {!loading ? "Claim" : "Claiming..."}
+                    </button>
+                  ) : (
+                    // Else, force fix
+                    <button className={styles.button__main} disabled>
+                      {address === ""
+                        ? "Enter Valid Address"
+                        : "Invalid Address"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* General among claimed or unclaimed, allow signing out */}
+              <div className={styles.content__twitter}>
+                <button onClick={() => signOut()}>
+                  Sign out @{session.discord_username}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Faucet details card */}
+      <div className={styles.home__card}>
+        {/* Card title */}
+        <div className={styles.home__card_title}>
+          <h3>Faucet Details</h3>
+        </div>
+
+        {/* General information */}
+        <div>
+          <div className={styles.home__card_content_section}>
+            <h4>General Information</h4>
+            <p>
+              Sign in with Discord to claim SUSDC from the faucet. You must be
+              a member of the Seismic Discord and hold a magnitude role of at
+              least 5.
+            </p>
+            <p className={styles.home__card_content_section_lh}>
+              The faucet drips SUSDC on your configured testnet. Each claim
+              gives you 10 SUSDC.
+            </p>
+            <p>You can claim from the faucet once every 24 hours.</p>
+          </div>
+        </div>
+      </div>
+    </Layout>
+  );
+}
+
+export async function getServerSideProps(context: any) {
+  // Collect session
+  const session: any = await getServerSession(
+    context.req,
+    context.res,
+    authOptions,
+  );
+
+  if (!session) {
+    return {
+      props: {
+        session,
+        claimed: false,
+      },
+    };
+  }
+
+  const userId =
+    session.provider === "twitter"
+      ? session.twitter_id
+      : session.provider === "github"
+        ? session.github_id
+        : session.discord_id;
+
+  // Check if user is whitelisted (same as backend)
+  const isWhitelisted = whitelist.includes(userId);
+
+  // If whitelisted, always show as not claimed
+  if (isWhitelisted) {
+    return {
+      props: {
+        session,
+        claimed: false,
+      },
+    };
+  }
+
+  // Check if user has claimed on the main network
+  const claimed = await hasClaimed(userId, mainNetwork.name);
+
+  return {
+    props: {
+      session,
+      claimed,
+    },
+  };
+}
