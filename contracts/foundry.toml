@@ -1,7 +1,7 @@
 [profile.default]
 src = "src"
 out = "out"
-libs = ["lib"]
+libs = ["lib", "dependencies"]
 remappings = [
     "ds-test/=lib/ds-test/src/",
     "forge-std/=lib/forge-std/src/",
@@ -10,3 +10,6 @@ remappings = [
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+[dependencies]
+seismic-std-lib = "0.1.4"

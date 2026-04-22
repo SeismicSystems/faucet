@@ -25,9 +25,11 @@ contract SeismicFaucetUser {
 
     /// ============ Helper functions ============
 
-    /// @notice Returns ETH balance of user
-    function ETHBalance() public view returns (uint256) {
-        return address(this).balance;
+    /// @notice Returns this user's SUSDC balance
+    /// @dev SRC20.balance() reads `balances[msg.sender]`, so calling from
+    ///      within this contract returns this contract's own balance.
+    function SUSDCBalance() public view returns (uint256) {
+        return FAUCET.susdc().balance();
     }
 
     /// ============ Inherited Functionality ============
@@ -71,23 +73,20 @@ contract SeismicFaucetUser {
     }
 
     /// @notice Updates drip amount
-    /// @param _ethAmount ETH to drip
-    function updateDripAmount(uint256 _ethAmount) public {
-        FAUCET.updateDripAmount(_ethAmount);
+    /// @param _amount SUSDC to drip (6 decimals)
+    function updateDripAmount(uint256 _amount) public {
+        FAUCET.updateDripAmount(_amount);
     }
 
     /// @notice Updates developer drip amount
-    /// @param _ethAmount ETH to drip to developers
-    function updateDeveloperDripAmount(uint256 _ethAmount) public {
-        FAUCET.updateDeveloperDripAmount(_ethAmount);
+    /// @param _amount SUSDC to drip to developers (6 decimals)
+    function updateDeveloperDripAmount(uint256 _amount) public {
+        FAUCET.updateDeveloperDripAmount(_amount);
     }
 
     /// @notice Updates whitelist drip amount
-    /// @param _ethAmount ETH to drip to whitelisted users
-    function updateWhitelistDripAmount(uint256 _ethAmount) public {
-        FAUCET.updateWhitelistDripAmount(_ethAmount);
+    /// @param _amount SUSDC to drip to whitelisted users (6 decimals)
+    function updateWhitelistDripAmount(uint256 _amount) public {
+        FAUCET.updateWhitelistDripAmount(_amount);
     }
-
-    /// @notice Allows receiving ETH
-    receive() external payable {}
 }

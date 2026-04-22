@@ -67,24 +67,31 @@ export const seismicFaucetAbi = [
   // Read Functions
   {
     type: "function",
-    name: "ETH_AMOUNT",
+    name: "USDC_AMOUNT",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
   },
   {
     type: "function",
-    name: "DEVELOPER_ETH_AMOUNT",
+    name: "DEVELOPER_USDC_AMOUNT",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
   },
   {
     type: "function",
-    name: "WHITELIST_ETH_AMOUNT",
+    name: "WHITELIST_USDC_AMOUNT",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "susdc",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address", internalType: "contract ISRC20" }],
   },
   {
     type: "function",
@@ -99,13 +106,6 @@ export const seismicFaucetAbi = [
     stateMutability: "view",
     inputs: [{ name: "", type: "address", internalType: "address" }],
     outputs: [{ name: "", type: "bool", internalType: "bool" }],
-  },
-  {
-    type: "function",
-    name: "availableDrips",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "ethDrips", type: "uint256", internalType: "uint256" }],
   },
   // Write Functions
   {
@@ -202,7 +202,7 @@ export const seismicFaucetAbi = [
     stateMutability: "nonpayable",
     inputs: [
       {
-        name: "_ethAmount",
+        name: "_amount",
         type: "uint256",
         internalType: "uint256",
       },
@@ -215,7 +215,7 @@ export const seismicFaucetAbi = [
     stateMutability: "nonpayable",
     inputs: [
       {
-        name: "_ethAmount",
+        name: "_amount",
         type: "uint256",
         internalType: "uint256",
       },
@@ -228,16 +228,11 @@ export const seismicFaucetAbi = [
     stateMutability: "nonpayable",
     inputs: [
       {
-        name: "_ethAmount",
+        name: "_amount",
         type: "uint256",
         internalType: "uint256",
       },
     ],
     outputs: [],
-  },
-  // Receive Function
-  {
-    type: "receive",
-    stateMutability: "payable",
   },
 ] as const;
