@@ -11,6 +11,7 @@ const SEISMIC_TEAM = [
   "30359739", // Lyron Co Ting Keh (@lyronctk)
   "57149625", // Matt Haines (@mHaines9219)
   "9342524", // Sam Laferriere (@samlaf)
+  "67980579", // Henry Baldwin (@HenryMBaldwin)
 ];
 
 // Brookwell team GitHub IDs
