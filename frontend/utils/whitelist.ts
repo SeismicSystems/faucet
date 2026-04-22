@@ -1,5 +1,5 @@
 /*
- * WHITELIST (Trusted - 10 ETH, no cooldown)
+ * WHITELIST (Trusted - 250 SUSDC, no cooldown)
  */
 
 // Seismic team GitHub IDs
@@ -47,7 +47,7 @@ const FIREBLOCKS_TEAM = [
 ];
 
 /*
- * DEVELOPERS (2 ETH, 24h cooldown)
+ * DEVELOPERS (50 SUSDC, 24h cooldown)
  */
 const DEVELOPERS = [
   "158461935", // Dave Thompson (@Davethompson01)
@@ -66,7 +66,7 @@ const DISCORD_DEVELOPERS: string[] = [];
  * EXPORTS
  */
 
-// Whitelist: trusted users (10 ETH, no cooldown)
+// Whitelist: trusted users (250 SUSDC, no cooldown)
 export const whitelist = [
   ...SEISMIC_TEAM,
   ...BROOKWELL_TEAM,
@@ -78,5 +78,5 @@ export const whitelist = [
   ...DISCORD_WHITELIST,
 ];
 
-// Developers: elevated access (2 ETH, 24h cooldown)
+// Developers: elevated access (50 SUSDC, 24h cooldown)
 export const developerList = [...DEVELOPERS, ...DISCORD_DEVELOPERS];

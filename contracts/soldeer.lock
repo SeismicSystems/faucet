@@ -1,0 +1,6 @@
+[[dependencies]]
+name = "seismic-std-lib"
+version = "0.1.4"
+url = "https://soldeer-revisions.s3.amazonaws.com/seismic-std-lib/0_1_4_09-04-2026_11:00:23_seismic-std-lib.zip"
+checksum = "b167ff9c3a02a84bb2d6ba036ab31e448a059d81c3124bb58cde93dd421a9edb"
+integrity = "c5044550aeb7a2f03e97bd5e45db2a29be1b5cf072659686227a3089e6392f0a"

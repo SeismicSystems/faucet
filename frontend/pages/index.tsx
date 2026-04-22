@@ -49,11 +49,11 @@ export default function Home({
       // Toast if success + toggle claimed based on tier
       const tier = response.data.tier;
       if (tier === "whitelist") {
-        toast.success("You are whitelisted!! 🎉 Dripping 10 ETH...");
+        toast.success("You are whitelisted!! 🎉 Dripping 250 SUSDC...");
       } else if (tier === "developer") {
-        toast.success("Developer access! 🛠️ Dripping 2 ETH...");
+        toast.success("Developer access! 🛠️ Dripping 50 SUSDC...");
       } else {
-        toast.success("Tokens dispersed—check balances shortly!");
+        toast.success("SUSDC dispersed—check balances shortly!");
       }
       setClaimed(true);
       setFirstClaim(true);
@@ -219,13 +219,13 @@ export default function Home({
           <div className={styles.home__card_content_section}>
             <h4>General Information</h4>
             <p>
-              Sign in with Twitter or GitHub to claim ETH from the faucet.
+              Sign in with Twitter or GitHub to claim SUSDC from the faucet.
               Twitter requires {">"}50 followers, GitHub requires {">"}10
               followers.
             </p>
             <p className={styles.home__card_content_section_lh}>
-              The faucet drips ETH on your configured testnet. Each claim gives
-              you 0.5 ETH.
+              The faucet drips SUSDC on your configured testnet. Each claim
+              gives you 10 SUSDC.
             </p>
             <p>You can claim from the faucet once every 24 hours.</p>
           </div>

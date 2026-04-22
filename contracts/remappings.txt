@@ -1,0 +1,2 @@
+seismic-std-lib-0.1.4/=dependencies/seismic-std-lib-0.1.4/
+seismic-std-lib/=dependencies/seismic-std-lib-0.1.4/
