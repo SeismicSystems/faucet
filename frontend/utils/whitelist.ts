@@ -47,6 +47,11 @@ const FIREBLOCKS_TEAM = [
   "207824728", // Tomer Shoham (@tomer-shoham)
 ];
 
+// Anchorage team GitHub IDs
+const ANCHORAGE_TEAM = [
+  "272382493", // Rodrigo Nascimento (@rodrigonascimento-anchorlabs)
+];
+
 /*
  * DEVELOPERS (50 SUSDC, 24h cooldown)
  */
@@ -75,6 +80,7 @@ export const whitelist = [
   ...PIMLICO_TEAM,
   ...ANKR_TEAM,
   ...FIREBLOCKS_TEAM,
+  ...ANCHORAGE_TEAM,
   ...TWITTER_WHITELIST,
   ...DISCORD_WHITELIST,
 ];
