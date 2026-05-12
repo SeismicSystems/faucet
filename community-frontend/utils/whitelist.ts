@@ -52,6 +52,11 @@ const ANCHORAGE_TEAM = [
   "272382493", // Rodrigo Nascimento (@rodrigonascimento-anchorlabs)
 ];
 
+// Den team GitHub IDs
+const DEN_TEAM = [
+  "8534926", // Jonah Erlich (@jierlich)
+];
+
 /*
  * DEVELOPERS (50 SUSDC, 24h cooldown)
  */
@@ -81,6 +86,7 @@ export const whitelist = [
   ...ANKR_TEAM,
   ...FIREBLOCKS_TEAM,
   ...ANCHORAGE_TEAM,
+  ...DEN_TEAM,
   ...TWITTER_WHITELIST,
   ...DISCORD_WHITELIST,
 ];
