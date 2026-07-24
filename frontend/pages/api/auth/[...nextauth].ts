@@ -87,14 +87,21 @@ export const authOptions: NextAuthOptions = {
       // If signing in
       if (isSignIn && profile) {
         if (account?.provider === "twitter") {
-          // Attach Twitter parameters
+          // Attach Twitter parameters (OAuth 2.0 profile shape)
           const twitterProfile = profile as any;
+          const twitterData = twitterProfile.data || twitterProfile;
           token.provider = "twitter";
           token.twitter_id = account?.providerAccountId;
-          token.twitter_handle = twitterProfile.screen_name;
-          token.twitter_num_tweets = twitterProfile.statuses_count;
-          token.twitter_num_followers = twitterProfile.followers_count;
-          token.twitter_created_at = twitterProfile.created_at;
+          token.twitter_handle =
+            twitterData.username || twitterProfile.screen_name;
+          token.twitter_num_tweets =
+            twitterData.public_metrics?.tweet_count ??
+            twitterProfile.statuses_count;
+          token.twitter_num_followers =
+            twitterData.public_metrics?.followers_count ??
+            twitterProfile.followers_count;
+          token.twitter_created_at =
+            twitterData.created_at || twitterProfile.created_at;
         } else if (account?.provider === "github") {
           // Attach GitHub parameters - use profile.id which matches the GitHub API user ID
           const githubProfile = profile as any;
