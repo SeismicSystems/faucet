@@ -12,4 +12,4 @@ remappings = [
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
 [dependencies]
-seismic-std-lib = "0.1.4"
+seismic-std-lib = "0.2.0"
