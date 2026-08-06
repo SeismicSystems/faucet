@@ -8,7 +8,7 @@ const client = new Redis(process.env.REDIS_URL as string);
 
 /**
  * Checks if a user has claimed from faucet on a specific network in last 24h
- * @param {string} userId - Twitter or GitHub user ID
+ * @param {string} userId - GitHub or Discord user ID
  * @param {string} chainName - Network/chain name
  * @returns {Promise<boolean>} claim status
  */
@@ -28,11 +28,9 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
     try {
       // Use provider-specific ID for claim tracking
       const userId =
-        session.provider === "twitter"
-          ? session.twitter_id
-          : session.provider === "github"
-            ? session.github_id
-            : session.discord_id;
+        session.provider === "github"
+          ? session.github_id
+          : session.discord_id;
 
       // Check claim status on the main network
       const claimed = await hasClaimed(userId, mainNetwork.name);

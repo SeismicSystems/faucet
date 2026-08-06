@@ -20,7 +20,6 @@ import { mainNetwork } from "@/utils/networks";
 import { whitelist, developerList } from "@/utils/whitelist";
 // import { getDiscordMagnitude } from "@/utils/discord";
 
-const MIN_TWITTER_FOLLOWERS = 50;
 const MIN_GITHUB_FOLLOWERS = 10;
 // const MIN_DISCORD_MAGNITUDE = 5;
 
@@ -140,13 +139,11 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
 
   // Validate authentication provider
   const userId =
-    session.provider === "twitter"
-      ? session.twitter_id
-      : session.provider === "github"
-        ? session.github_id
-        : session.provider === "discord"
-          ? session.discord_id
-          : null;
+    session.provider === "github"
+      ? session.github_id
+      : session.provider === "discord"
+        ? session.discord_id
+        : null;
 
   console.log(`[claim/new] User ID: ${userId}`);
 
@@ -164,16 +161,6 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
       ? "developer"
       : "regular";
   console.log(`[claim/new] User tier: ${tier}`);
-
-  // Validate Twitter followers (skip for whitelisted and developer users)
-  if (tier === "regular" && session.provider === "twitter") {
-    const followerCount = session.twitter_num_followers || 0;
-    if (followerCount < MIN_TWITTER_FOLLOWERS) {
-      return res.status(403).send({
-        error: `Minimum ${MIN_TWITTER_FOLLOWERS} Twitter followers required. You have ${followerCount}.`,
-      });
-    }
-  }
 
   // Validate GitHub followers (skip for whitelisted and developer users)
   if (tier === "regular" && session.provider === "github") {

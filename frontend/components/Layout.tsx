@@ -97,22 +97,6 @@ function Head() {
         property="og:image"
         content="https://faucet.seismic.systems/meta.png"
       />
-
-      {/* Twitter */}
-      <meta property="twitter:card" content="summary_large_image" />
-      <meta property="twitter:url" content="https://faucet.seismic.systems" />
-      <meta
-        property="twitter:title"
-        content="Seismic Faucet | Bootstrap your testnet wallet"
-      />
-      <meta
-        property="twitter:description"
-        content="Seismic Faucet funds your Seismic testnet/devnet wallet."
-      />
-      <meta
-        property="twitter:image"
-        content="https://faucet.seismic.systems/meta.png"
-      />
     </HTMLHead>
   );
 }

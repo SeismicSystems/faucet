@@ -20,11 +20,6 @@ const BROOKWELL_TEAM = [
   "51090093", // Rohan Patra (@rohan-patra)
 ];
 
-// Twitter IDs for whitelist
-const TWITTER_WHITELIST = [
-  "1311531128201916417", // Ameya Deshmukh (@0xameya)
-];
-
 // Chainlink team GitHub IDs
 const CHAINLINK_TEAM = [
   "2430254", // Todor Karaivanov (@tkaraivanov)
@@ -64,9 +59,6 @@ const DEVELOPERS = [
   "158461935", // Dave Thompson (@Davethompson01)
 ];
 
-// Twitter IDs for developers
-const TWITTER_DEVELOPERS: string[] = [];
-
 // Discord IDs for whitelist
 const DISCORD_WHITELIST: string[] = [];
 
@@ -87,7 +79,6 @@ export const whitelist = [
   ...FIREBLOCKS_TEAM,
   ...ANCHORAGE_TEAM,
   ...DEN_TEAM,
-  ...TWITTER_WHITELIST,
   ...DISCORD_WHITELIST,
 ];
 

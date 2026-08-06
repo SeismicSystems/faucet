@@ -2,7 +2,7 @@
 
 ## About
 
-Frontend to accompany [MultiFaucet contracts](https://github.com/Anish-Agnihotri/MultiFaucet/tree/master/contracts). Authenticates user with Twitter OAuth, stores claim for 24h in Redis, calls drip function on contract.
+Frontend to accompany [MultiFaucet contracts](https://github.com/Anish-Agnihotri/MultiFaucet/tree/master/contracts). Authenticates user with Discord OAuth, stores claim for 24h in Redis, calls drip function on contract.
 
 ## Run locally
 

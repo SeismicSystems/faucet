@@ -102,8 +102,8 @@ export default function Home({
             <div className={styles.content__unauthenticated}>
               {/* Reasoning for OAuth */}
               <p>
-                To prevent faucet botting, you must sign in with Twitter or
-                GitHub. We request read-only access to verify your account.
+                To prevent faucet botting, you must sign in with GitHub. We
+                request read-only access to verify your account.
               </p>
 
               {/* Sign in buttons */}
@@ -114,12 +114,6 @@ export default function Home({
                   flexDirection: "column",
                 }}
               >
-                <button
-                  className={styles.button__main}
-                  onClick={() => signIn("twitter")}
-                >
-                  Sign In with Twitter/X
-                </button>
                 <button
                   className={styles.button__main}
                   onClick={() => signIn("github")}
@@ -192,14 +186,12 @@ export default function Home({
               )}
 
               {/* General among claimed or unclaimed, allow signing out */}
-              <div className={styles.content__twitter}>
+              <div className={styles.content__signout}>
                 <button onClick={() => signOut()}>
                   Sign out @
-                  {session.provider === "twitter"
-                    ? session.twitter_handle
-                    : session.provider === "github"
-                      ? session.github_username
-                      : session.discord_username}
+                  {session.provider === "github"
+                    ? session.github_username
+                    : session.discord_username}
                 </button>
               </div>
             </div>
@@ -219,9 +211,8 @@ export default function Home({
           <div className={styles.home__card_content_section}>
             <h4>General Information</h4>
             <p>
-              Sign in with Twitter or GitHub to claim SUSDC from the faucet.
-              Twitter requires {">"}50 followers, GitHub requires {">"}10
-              followers.
+              Sign in with GitHub to claim SUSDC from the faucet. GitHub
+              requires {">"}10 followers.
             </p>
             <p className={styles.home__card_content_section_lh}>
               The faucet drips SUSDC on your configured testnet. Each claim
@@ -253,11 +244,7 @@ export async function getServerSideProps(context: any) {
   }
 
   const userId =
-    session.provider === "twitter"
-      ? session.twitter_id
-      : session.provider === "github"
-        ? session.github_id
-        : session.discord_id;
+    session.provider === "github" ? session.github_id : session.discord_id;
 
   // Check if user is whitelisted (same as backend)
   const isWhitelisted = whitelist.includes(userId);
