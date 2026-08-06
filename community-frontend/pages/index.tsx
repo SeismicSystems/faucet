@@ -181,7 +181,7 @@ export default function Home({
               )}
 
               {/* General among claimed or unclaimed, allow signing out */}
-              <div className={styles.content__twitter}>
+              <div className={styles.content__signout}>
                 <button onClick={() => signOut()}>
                   Sign out @{session.discord_username}
                 </button>
@@ -237,11 +237,7 @@ export async function getServerSideProps(context: any) {
   }
 
   const userId =
-    session.provider === "twitter"
-      ? session.twitter_id
-      : session.provider === "github"
-        ? session.github_id
-        : session.discord_id;
+    session.provider === "github" ? session.github_id : session.discord_id;
 
   // Check if user is whitelisted (same as backend)
   const isWhitelisted = whitelist.includes(userId);
