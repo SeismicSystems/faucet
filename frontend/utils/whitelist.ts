@@ -52,6 +52,12 @@ const DEN_TEAM = [
   "8534926", // Jonah Erlich (@jierlich)
 ];
 
+// MoonPay team GitHub IDs
+const MOONPAY_TEAM = [
+  "42893075", // Leonard Kulms (@leonardkulms)
+  "26767653", // abcalphabet (@abcalphabet)
+];
+
 /*
  * DEVELOPERS (50 SUSDC, 24h cooldown)
  */
@@ -79,6 +85,7 @@ export const whitelist = [
   ...FIREBLOCKS_TEAM,
   ...ANCHORAGE_TEAM,
   ...DEN_TEAM,
+  ...MOONPAY_TEAM,
   ...DISCORD_WHITELIST,
 ];
 
