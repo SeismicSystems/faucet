@@ -20,7 +20,7 @@ import { mainNetwork } from "@/utils/networks";
 import { whitelist, developerList } from "@/utils/whitelist";
 import { getDiscordMagnitude } from "@/utils/discord";
 
-const MIN_DISCORD_MAGNITUDE = 5;
+const MIN_DISCORD_MAGNITUDE = 1;
 
 // Setup redis and slack clients
 const client = new Redis(process.env.REDIS_URL as string);
