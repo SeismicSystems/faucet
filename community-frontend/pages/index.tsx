@@ -205,7 +205,7 @@ export default function Home({
             <p>
               Sign in with Discord to claim SUSDC from the faucet. You must be
               a member of the Seismic Discord and hold a magnitude role of at
-              least 5.
+              least 1.
             </p>
             <p className={styles.home__card_content_section_lh}>
               The faucet drips SUSDC on your configured testnet. Each claim
