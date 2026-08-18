@@ -1,4 +1,4 @@
-import Redis from "ioredis";
+import { redis as client } from "@/utils/redis";
 import { WebClient } from "@slack/web-api";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
@@ -22,8 +22,7 @@ import { getDiscordMagnitude } from "@/utils/discord";
 
 const MIN_DISCORD_MAGNITUDE = 1;
 
-// Setup redis and slack clients
-const client = new Redis(process.env.REDIS_URL as string);
+// Setup slack client
 const slack = new WebClient(process.env.SLACK_ACCESS_TOKEN);
 const slackChannel = process.env.SLACK_CHANNEL ?? "";
 
