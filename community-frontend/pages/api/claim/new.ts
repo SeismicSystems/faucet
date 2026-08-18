@@ -28,11 +28,19 @@ const slack = new WebClient(process.env.SLACK_ACCESS_TOKEN);
 const slackChannel = process.env.SLACK_CHANNEL ?? "";
 
 async function postSlackMessage(message: string): Promise<void> {
-  await slack.chat.postMessage({
-    channel: slackChannel,
-    text: message,
-    link_names: true,
-  });
+  try {
+    await slack.chat.postMessage({
+      channel: slackChannel,
+      text: message,
+      link_names: true,
+    });
+  } catch (e: any) {
+    // Alerting must never break dripping: callers invoke this inside the drip
+    // catch block before the nonce self-heal, so a throw here would skip it.
+    console.error(
+      `[postSlackMessage] Failed to post to Slack: ${e.message || String(e)}`,
+    );
+  }
 }
 
 type UserTier = "whitelist" | "developer" | "regular";
