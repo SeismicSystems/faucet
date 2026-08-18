@@ -1,6 +1,6 @@
 # Seismic Faucet
 
-Seismic Faucet drips ETH across Seismic testnet networks.
+Seismic Faucet drips sUSDC across Seismic testnet networks.
 
 READMEs can be found individual subdirectories:
 
