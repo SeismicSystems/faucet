@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - seismic
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: faucet-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - frontend
+          - community-frontend
+    defaults:
+      run:
+        working-directory: ${{ matrix.app }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Build
+        run: bun run build
+
+  contracts:
+    name: Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+
+      - name: Install Seismic Foundry
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.seismic/bin" "$HOME/.config/.seismic/bin"
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            https://raw.githubusercontent.com/SeismicSystems/seismic-foundry/5048ad8a85892a5abd6eec138a1c40543bbed33a/foundryup/foundryup \
+            -o "$HOME/.seismic/bin/sfoundryup"
+          chmod +x "$HOME/.seismic/bin/sfoundryup"
+          echo "$HOME/.seismic/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.config/.seismic/bin" >> "$GITHUB_PATH"
+          "$HOME/.seismic/bin/sfoundryup" --install v0.3.0
+
+      - name: Install Solidity dependencies
+        working-directory: contracts
+        run: sforge soldeer install --config-location foundry
+
+      - name: Check formatting
+        working-directory: contracts
+        run: sforge fmt --check
+
+      - name: Build contracts
+        working-directory: contracts
+        run: sforge build
+
+      - name: Check contract ABIs
+        run: bun run scripts/check-contract-abi.ts
+
+      - name: Test contracts
+        working-directory: contracts
+        run: sforge test
