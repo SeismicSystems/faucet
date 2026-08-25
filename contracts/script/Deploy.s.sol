@@ -21,18 +21,22 @@ contract DeployScript is Script {
         // Reserve account
         uint256 reservePrivateKey = vm.envUint("FAUCET_RESERVE_PRIVATE_KEY");
 
+        // Dedicated machine funding operator
+        address machineFundingAccount = vm.envAddress("INTERNAL_FUNDING_ADDRESS");
+        require(machineFundingAccount != address(0), "Invalid machine funding account");
+
         // SUSDC (SRC20) token address
         address susdcAddress = vm.envAddress("SUSDC_ADDRESS");
 
         address reserveAccount = vm.addr(reservePrivateKey);
         address faucetAccount = vm.addr(faucetPrivateKey);
-
         vm.startBroadcast(faucetPrivateKey);
 
         SeismicFaucet faucet = new SeismicFaucet(susdcAddress);
 
         faucet.updateSuperOperator(reserveAccount, true);
         faucet.updateApprovedOperator(faucetAccount, true);
+        faucet.updateMachineOperator(machineFundingAccount, true);
 
         // Seed the faucet with SUSDC by admin-minting directly into it (no self-transfer round-trip)
         ISUSDCMintable(susdcAddress).mint(address(faucet), suint256(INITIAL_FAUCET_SEED));
@@ -49,5 +53,6 @@ contract DeployScript is Script {
         console.log("Initial seed (SUSDC, 6d):", INITIAL_FAUCET_SEED);
         console.log("Deployer/Faucet (super + approved operator):", faucetAccount);
         console.log("Reserve account (super operator):", reserveAccount);
+        console.log("Machine funding account (exact-transfer operator):", machineFundingAccount);
     }
 }
