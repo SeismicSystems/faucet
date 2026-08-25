@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "bun run next dev",
     "build": "bun run next build",
+    "typecheck": "tsc --noEmit",
     "start": "bun run next start",
     "lint": "bun run next lint",
     "contracts:compile": "bun run --cwd ../contracts sforge build",
@@ -31,6 +32,7 @@
     "axios": "1.13.2"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.0",
     "@types/ioredis": "^5.0.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
