@@ -15,6 +15,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Detect Rust workspace
+        id: workspace
+        shell: bash
+        run: |
+          if [[ -f Cargo.toml ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust
+        if: steps.workspace.outputs.exists == 'true'
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        if: steps.workspace.outputs.exists == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Redis
+        if: steps.workspace.outputs.exists == 'true'
+        run: sudo apt-get update && sudo apt-get install --yes redis-server
+
+      - name: Check formatting
+        if: steps.workspace.outputs.exists == 'true'
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        if: steps.workspace.outputs.exists == 'true'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        if: steps.workspace.outputs.exists == 'true'
+        run: cargo test --workspace --locked
+
+      - name: Build production binaries
+        if: steps.workspace.outputs.exists == 'true'
+        run: cargo build --workspace --release --locked
+
   frontend:
     name: ${{ matrix.app }}
     runs-on: ubuntu-latest
