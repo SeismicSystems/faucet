@@ -15,6 +15,19 @@ export const seismicFaucetAbi = [
   },
   {
     type: "event",
+    name: "FaucetTransferred",
+    inputs: [
+      {
+        name: "recipient",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "FaucetDrained",
     inputs: [
       {
@@ -29,6 +42,25 @@ export const seismicFaucetAbi = [
   {
     type: "event",
     name: "OperatorUpdated",
+    inputs: [
+      {
+        name: "operator",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "status",
+        type: "bool",
+        indexed: false,
+        internalType: "bool",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "MachineOperatorUpdated",
     inputs: [
       {
         name: "operator",
@@ -88,6 +120,13 @@ export const seismicFaucetAbi = [
   },
   {
     type: "function",
+    name: "MAX_EXACT_TRANSFER_AMOUNT",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
+  },
+  {
+    type: "function",
     name: "susdc",
     stateMutability: "view",
     inputs: [],
@@ -96,6 +135,13 @@ export const seismicFaucetAbi = [
   {
     type: "function",
     name: "approvedOperators",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address", internalType: "address" }],
+    outputs: [{ name: "", type: "bool", internalType: "bool" }],
+  },
+  {
+    type: "function",
+    name: "machineOperators",
     stateMutability: "view",
     inputs: [{ name: "", type: "address", internalType: "address" }],
     outputs: [{ name: "", type: "bool", internalType: "bool" }],
@@ -149,6 +195,24 @@ export const seismicFaucetAbi = [
   },
   {
     type: "function",
+    name: "transferExact",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "_recipient",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "_amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
     name: "drain",
     stateMutability: "nonpayable",
     inputs: [
@@ -163,6 +227,24 @@ export const seismicFaucetAbi = [
   {
     type: "function",
     name: "updateApprovedOperator",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "_operator",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "_status",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "updateMachineOperator",
     stateMutability: "nonpayable",
     inputs: [
       {
@@ -225,6 +307,19 @@ export const seismicFaucetAbi = [
   {
     type: "function",
     name: "updateWhitelistDripAmount",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "_amount",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "updateMaxExactTransferAmount",
     stateMutability: "nonpayable",
     inputs: [
       {

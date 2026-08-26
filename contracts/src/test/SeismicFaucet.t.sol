@@ -10,6 +10,9 @@ import "./utils/SeismicFaucetTest.sol"; // SeismicFaucet ds-test
 library Errors {
     string constant NotSuperOperator = "Not super operator";
     string constant NotApprovedOperator = "Not approved operator";
+    string constant NotMachineOperator = "Not machine operator";
+    string constant InvalidRecipient = "Invalid recipient";
+    string constant InvalidTransferAmount = "Invalid transfer amount";
 }
 
 /// @notice Default SUSDC drip amounts for tests (6 decimals)
@@ -243,5 +246,62 @@ contract Tests is SeismicFaucetTest {
     /// @notice Default whitelist SUSDC amount is 250 SUSDC
     function testDefaultWhitelistAmount() public {
         assertEq(FAUCET.WHITELIST_USDC_AMOUNT(), Amounts.WHITELIST);
+    }
+
+    /// @notice Machine operators can transfer an exact bounded amount
+    function testMachineOperatorCanTransferExactAmount() public {
+        uint256 amount = 37_500_001;
+        uint256 aliceBefore = ALICE.SUSDCBalance();
+
+        FAUCET.updateMachineOperator(address(BOB), true);
+        BOB.transferExact(address(ALICE), amount);
+
+        assertEq(ALICE.SUSDCBalance(), aliceBefore + amount);
+    }
+
+    /// @notice Public drip operators cannot transfer exact amounts
+    function testApprovedOperatorCannotTransferExactAmount() public {
+        FAUCET.updateApprovedOperator(address(BOB), true);
+        assertErrorFunctionWithAddressAndUint256(
+            BOB.transferExact, address(ALICE), Amounts.REGULAR, Errors.NotMachineOperator
+        );
+    }
+
+    /// @notice Exact transfers cannot exceed the configured ceiling
+    function testCannotTransferExactAmountAboveMaximum() public {
+        FAUCET.updateMachineOperator(address(BOB), true);
+
+        assertErrorFunctionWithAddressAndUint256(
+            BOB.transferExact, address(ALICE), Amounts.WHITELIST + 1, Errors.InvalidTransferAmount
+        );
+    }
+
+    /// @notice Exact transfers reject zero amounts and the zero recipient
+    function testExactTransferValidatesRecipientAndAmount() public {
+        FAUCET.updateMachineOperator(address(BOB), true);
+
+        assertErrorFunctionWithAddressAndUint256(BOB.transferExact, address(ALICE), 0, Errors.InvalidTransferAmount);
+        assertErrorFunctionWithAddressAndUint256(
+            BOB.transferExact, address(0), Amounts.REGULAR, Errors.InvalidRecipient
+        );
+    }
+
+    /// @notice Super operators can change the exact transfer ceiling
+    function testSuperOperatorCanUpdateMaximumExactTransferAmount() public {
+        uint256 newMaximum = 1_000e6;
+
+        ALICE.updateMaxExactTransferAmount(newMaximum);
+
+        assertEq(FAUCET.MAX_EXACT_TRANSFER_AMOUNT(), newMaximum);
+    }
+
+    /// @notice Non-super operators cannot change the exact transfer ceiling
+    function testCannotUpdateMaximumExactTransferAmountIfNotSuperOperator() public {
+        assertErrorFunctionWithUint256(BOB.updateMaxExactTransferAmount, 1_000e6, Errors.NotSuperOperator);
+    }
+
+    /// @notice Non-super operators cannot grant the machine operator role
+    function testCannotUpdateMachineOperatorIfNotSuperOperator() public {
+        assertErrorFunctionWithAddressAndBool(BOB.updateMachineOperator, address(BOB), true, Errors.NotSuperOperator);
     }
 }

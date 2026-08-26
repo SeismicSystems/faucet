@@ -47,6 +47,24 @@ contract DSTestExtended is DSTest {
 
     /// @notice Calls function and checks for matching revert message
     /// @param erroringFunction to call
+    /// @param _addr address to pass to function
+    /// @param _amount uint256 to pass to function
+    /// @param message to check against revert error string
+    function assertErrorFunctionWithAddressAndUint256(
+        function(address, uint256) external erroringFunction,
+        address _addr,
+        uint256 _amount,
+        string memory message
+    ) internal {
+        try erroringFunction(_addr, _amount) {
+            fail();
+        } catch Error(string memory error) {
+            assertEq(error, message);
+        }
+    }
+
+    /// @notice Calls function and checks for matching revert message
+    /// @param erroringFunction to call
     /// @param param uint256 to pass to function
     /// @param message to check against revert error string
     function assertErrorFunctionWithUint256(

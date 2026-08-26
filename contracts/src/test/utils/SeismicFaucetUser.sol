@@ -52,6 +52,13 @@ contract SeismicFaucetUser {
         FAUCET.dripWhitelist(_recipient);
     }
 
+    /// @notice Transfers an exact SUSDC amount from the faucet
+    /// @param _recipient recipient address
+    /// @param _amount SUSDC amount in 6-decimal base units
+    function transferExact(address _recipient, uint256 _amount) public {
+        FAUCET.transferExact(_recipient, _amount);
+    }
+
     /// @notice Drains faucet to a recipient address
     /// @param _recipient to drain to
     function drain(address _recipient) public {
@@ -63,6 +70,13 @@ contract SeismicFaucetUser {
     /// @param _status to update for operator (true == allowed to drip)
     function updateApprovedOperator(address _operator, bool _status) public {
         FAUCET.updateApprovedOperator(_operator, _status);
+    }
+
+    /// @notice Adds or removes an exact-transfer operator
+    /// @param _operator address
+    /// @param _status whether the operator may submit exact transfers
+    function updateMachineOperator(address _operator, bool _status) public {
+        FAUCET.updateMachineOperator(_operator, _status);
     }
 
     /// @notice Updates super operator
@@ -88,5 +102,11 @@ contract SeismicFaucetUser {
     /// @param _amount SUSDC to drip to whitelisted users (6 decimals)
     function updateWhitelistDripAmount(uint256 _amount) public {
         FAUCET.updateWhitelistDripAmount(_amount);
+    }
+
+    /// @notice Updates the exact transfer ceiling
+    /// @param _amount maximum SUSDC per transfer in 6-decimal base units
+    function updateMaxExactTransferAmount(uint256 _amount) public {
+        FAUCET.updateMaxExactTransferAmount(_amount);
     }
 }
