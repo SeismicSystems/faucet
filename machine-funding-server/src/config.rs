@@ -250,4 +250,10 @@ mod tests {
             Err(ConfigError::Invalid("INTERNAL_FUNDING_REQUEST_TIMEOUT_MS"))
         ));
     }
+
+    #[test]
+    fn timeout_envelope_keeps_proxy_and_client_margin() {
+        let nginx = include_str!("../../deploy/nginx.conf");
+        assert!(nginx.contains("proxy_read_timeout 50s"));
+    }
 }
