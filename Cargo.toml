@@ -1,0 +1,64 @@
+[workspace]
+members = ["machine-funding-server"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.88"
+
+[workspace.dependencies]
+async-trait = "0.1.89"
+axum = "0.7.9"
+seismic-alloy-network = { git = "https://github.com/SeismicSystems/seismic-alloy.git", rev = "c8fad0b93da53f2b423d2f6720abdb4a6cbb9082" }
+seismic-alloy-provider = { git = "https://github.com/SeismicSystems/seismic-alloy.git", rev = "c8fad0b93da53f2b423d2f6720abdb4a6cbb9082" }
+seismic-alloy-rpc-types = { git = "https://github.com/SeismicSystems/seismic-alloy.git", rev = "c8fad0b93da53f2b423d2f6720abdb4a6cbb9082" }
+alloy-contract = "=1.1.0"
+alloy-chains = "=0.2.17"
+alloy-eips = "=1.1.0"
+alloy-json-rpc = "=1.1.0"
+alloy-network = "=1.1.0"
+alloy-provider = { version = "=1.1.0", features = ["reqwest", "ws"] }
+alloy-rpc-types-eth = "=1.1.0"
+alloy-signer-local = "=1.1.0"
+alloy-transport = "=1.1.0"
+alloy-primitives = { version = "=1.4.1", features = ["seismic"] }
+alloy-sol-types = { version = "=1.4.1", features = ["seismic"] }
+ruint = "=1.17.0"
+hex = "0.4.3"
+redis = { version = "0.27.6", features = ["connection-manager", "tokio-comp"] }
+regex = "1.11.2"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.143"
+sha2 = "0.10.9"
+subtle = "2.6.1"
+thiserror = "2.0.16"
+tokio = { version = "1.47.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+uuid = { version = "1.18.0", features = ["v4"] }
+tower = "0.5.2"
+http-body-util = "0.1.3"
+url = "2.5.7"
+
+[patch.crates-io]
+seismic-enclave = { git = "https://github.com/SeismicSystems/enclave.git", rev = "f90b02f38a6190e8b2ff2d051d9043f3480cd3ac" }
+
+alloy-dyn-abi = { git = "https://github.com/SeismicSystems/seismic-alloy-core.git", rev = "994f7b3fbc4582c2e06a00d03c7f3fe476b1b7c7" }
+alloy-primitives = { git = "https://github.com/SeismicSystems/seismic-alloy-core.git", rev = "994f7b3fbc4582c2e06a00d03c7f3fe476b1b7c7" }
+alloy-json-abi = { git = "https://github.com/SeismicSystems/seismic-alloy-core.git", rev = "994f7b3fbc4582c2e06a00d03c7f3fe476b1b7c7" }
+alloy-sol-macro-expander = { git = "https://github.com/SeismicSystems/seismic-alloy-core.git", rev = "994f7b3fbc4582c2e06a00d03c7f3fe476b1b7c7" }
+alloy-sol-macro-input = { git = "https://github.com/SeismicSystems/seismic-alloy-core.git", rev = "994f7b3fbc4582c2e06a00d03c7f3fe476b1b7c7" }
+alloy-sol-types = { git = "https://github.com/SeismicSystems/seismic-alloy-core.git", rev = "994f7b3fbc4582c2e06a00d03c7f3fe476b1b7c7" }
+alloy-sol-type-parser = { git = "https://github.com/SeismicSystems/seismic-alloy-core.git", rev = "994f7b3fbc4582c2e06a00d03c7f3fe476b1b7c7" }
+
+alloy-trie = { git = "https://github.com/SeismicSystems/seismic-trie.git", rev = "2787e2265d492fa8eaee00424585b8f7e522178f" }
+
+alloy-consensus = { git = "https://github.com/alloy-rs/alloy", tag = "v1.1.0" }
+alloy-eips = { git = "https://github.com/alloy-rs/alloy", tag = "v1.1.0" }
+alloy-serde = { git = "https://github.com/alloy-rs/alloy", tag = "v1.1.0" }
+alloy-network-primitives = { git = "https://github.com/alloy-rs/alloy", tag = "v1.1.0" }
+
+[profile.release]
+lto = "thin"
+strip = true

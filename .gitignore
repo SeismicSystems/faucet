@@ -36,6 +36,7 @@ yarn-error.log*
 
 # Redis
 dump.rdb
+/target/
 
 # Soldeer dependencies (reproducible via soldeer.lock)
 contracts/dependencies/
