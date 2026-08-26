@@ -1,0 +1,200 @@
+# shellcheck shell=bash
+# Symlink this file once on the faucet machine:
+#
+#   mv ~/.bash_aliases ~/.bash_aliases.bak 2>/dev/null
+#   ln -s /home/ubuntu/faucet/deploy/bash_aliases ~/.bash_aliases
+#   source ~/.bash_aliases
+
+_faucet_repo=${FAUCET_REPO:-/home/ubuntu/faucet}
+_faucet_lock_file=/tmp/faucet-deploy.lock
+_faucet_aliases_loaded_from=${BASH_SOURCE[0]}
+_faucet_aliases_checked_out=$_faucet_repo/deploy/bash_aliases
+
+_faucet_fingerprint() {
+    sha256sum "$1" 2>/dev/null | cut -c1-12
+}
+
+_faucet_aliases_loaded_fingerprint=$(_faucet_fingerprint "$_faucet_aliases_loaded_from")
+
+_faucet_aliases_check() {
+    on_disk=$(_faucet_fingerprint "$_faucet_aliases_checked_out")
+    [ -n "$on_disk" ] && [ -n "$_faucet_aliases_loaded_fingerprint" ] || return 0
+    [ "$on_disk" = "$_faucet_aliases_loaded_fingerprint" ] && return 0
+
+    echo "ABORT: this shell's faucet deploy aliases are stale." >&2
+    echo "       run: source ~/.bash_aliases" >&2
+    return 1
+}
+
+_faucet_lock_acquire() {
+    _faucet_aliases_check || return 1
+    exec 9>"$_faucet_lock_file"
+    if ! flock -n 9; then
+        echo "another faucet deploy is running: $(cat "$_faucet_lock_file" 2>/dev/null)" >&2
+        return 1
+    fi
+    printf '%s pid=%s started=%s\n' \
+        "${1:-deploy}" "$BASHPID" "$(date -u +%FT%TZ)" >&9
+}
+
+_faucet_require_file() {
+    [ -f "$1" ] && return 0
+    echo "required file is missing: $1" >&2
+    return 1
+}
+
+_faucet_require_command() {
+    command -v "$1" >/dev/null 2>&1 && return 0
+    echo "required command is missing: $1" >&2
+    return 1
+}
+
+_faucet_require_env() {
+    [ -n "${!1:-}" ] && return 0
+    echo "required environment variable is missing: $1" >&2
+    return 1
+}
+
+_faucet_set_env_value() {
+    env_file=$1
+    key=$2
+    value=$3
+    temp=$(mktemp "${env_file}.XXXXXX") || return 1
+    chmod 600 "$temp"
+    awk -v key="$key" -v value="$value" '
+        BEGIN { found = 0 }
+        $0 ~ "^" key "=" {
+            print key "=\"" value "\""
+            found = 1
+            next
+        }
+        { print }
+        END {
+            if (!found) {
+                print key "=\"" value "\""
+            }
+        }
+    ' "$env_file" > "$temp"
+    mv "$temp" "$env_file"
+}
+
+faucet() {
+    cd "$_faucet_repo" || return 1
+}
+
+_faucet_pull() (
+    set -e
+    _faucet_lock_acquire fpull
+    branch=${1:-seismic}
+
+    cd "$_faucet_repo"
+    if [ -n "$(command git status --porcelain --untracked-files=no)" ]; then
+        echo "ABORT: faucet checkout has tracked changes." >&2
+        exit 1
+    fi
+    command git fetch origin "$branch"
+    command git checkout "$branch"
+    command git merge --ff-only FETCH_HEAD
+)
+
+fpull() {
+    _faucet_pull "$@" || return 1
+    source "$_faucet_aliases_checked_out"
+    cd "$_faucet_repo" || return 1
+}
+
+deploy_frontend() (
+    set -e
+    _faucet_lock_acquire deploy_frontend
+    _faucet_require_file "$_faucet_repo/frontend/.env"
+    _faucet_require_command bun
+
+    cd "$_faucet_repo/frontend"
+    bun install --frozen-lockfile
+    bun run build
+    sudo supervisorctl restart faucet-frontend
+)
+
+deploy_community_frontend() (
+    set -e
+    _faucet_lock_acquire deploy_community_frontend
+    _faucet_require_file "$_faucet_repo/community-frontend/.env"
+    _faucet_require_command bun
+
+    cd "$_faucet_repo/community-frontend"
+    bun install --frozen-lockfile
+    bun run build
+    sudo supervisorctl restart faucet-discord-frontend
+)
+
+deploy_machine_faucet_server() (
+    set -e
+    _faucet_lock_acquire deploy_machine_faucet_server
+    env_file=$_faucet_repo/.env.machine-funding
+    _faucet_require_file "$env_file"
+    _faucet_require_command cargo
+    _faucet_require_command curl
+
+    cd "$_faucet_repo"
+    cargo build --release --locked -p faucet-machine-funding
+    sudo supervisorctl restart faucet-machine-funding
+
+    set -a
+    source "$env_file"
+    set +a
+    curl --fail --silent --show-error \
+        -H "Authorization: Bearer $INTERNAL_FUNDING_TOKEN" \
+        http://127.0.0.1:3002/api/internal/readiness
+    echo
+)
+
+deploy_contracts() (
+    set -e
+    _faucet_lock_acquire deploy_contracts
+    frontend_env=$_faucet_repo/frontend/.env
+    community_env=$_faucet_repo/community-frontend/.env
+    machine_env=$_faucet_repo/.env.machine-funding
+
+    _faucet_require_file "$frontend_env"
+    _faucet_require_file "$community_env"
+    _faucet_require_file "$machine_env"
+    _faucet_require_command bun
+    _faucet_require_command jq
+    _faucet_require_command scast
+
+    set -a
+    source "$frontend_env"
+    set +a
+    _faucet_require_env RPC_URL
+    _faucet_require_env FAUCET_PRIVATE_KEY
+    _faucet_require_env FAUCET_RESERVE_PRIVATE_KEY
+    _faucet_require_env INTERNAL_FUNDING_ADDRESS
+    _faucet_require_env SUSDC_ADDRESS
+
+    cd "$_faucet_repo/frontend"
+    bun run contracts:deploy
+
+    chain_id=$(scast chain-id --rpc-url "$RPC_URL")
+    broadcast=$_faucet_repo/contracts/broadcast/Deploy.s.sol/$chain_id/run-latest.json
+    _faucet_require_file "$broadcast"
+    faucet_address=$(jq -er '
+        [.transactions[]
+            | select(.contractName == "SeismicFaucet")
+            | .contractAddress
+            | select(. != null)]
+        | last
+    ' "$broadcast")
+
+    [[ "$faucet_address" =~ ^0x[0-9a-fA-F]{40}$ ]] || {
+        echo "invalid faucet address in $broadcast: $faucet_address" >&2
+        exit 1
+    }
+
+    _faucet_set_env_value "$frontend_env" FAUCET_ADDRESS "$faucet_address"
+    _faucet_set_env_value "$community_env" FAUCET_ADDRESS "$faucet_address"
+    _faucet_set_env_value "$machine_env" FAUCET_ADDRESS "$faucet_address"
+
+    echo "deployed faucet contract: $faucet_address"
+    echo "updated FAUCET_ADDRESS in frontend, community-frontend and machine-funding env files"
+    echo "activate it with: deploy_frontend; deploy_community_frontend; deploy_machine_faucet_server"
+)
