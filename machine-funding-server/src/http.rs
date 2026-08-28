@@ -77,8 +77,8 @@ where
     let common = validate_common(request.idempotency_key, request.recipient, request.reason)?;
     service
         .execute(FundingInput {
-            asset: FundingAsset::Native,
-            amount: service.config().gas_amount_wei,
+            asset: FundingAsset::SusdcGas,
+            amount: service.config().gas_susdc_amount,
             ..common
         })
         .await

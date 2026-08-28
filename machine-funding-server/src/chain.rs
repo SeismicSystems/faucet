@@ -1,6 +1,6 @@
 use crate::{
     config::Config,
-    model::{ChainResult, FundingAsset, FundingInput, PreparedTransaction, ServiceError},
+    model::{ChainResult, FundingInput, PreparedTransaction, ServiceError},
 };
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::TransactionBuilder;
@@ -97,7 +97,12 @@ impl EvmChainDriver {
             confirmations: config.confirmations,
             receipt_timeout: config.receipt_timeout,
         };
-        driver.validate_faucet(config.max_susdc_amount).await?;
+        driver
+            .validate_faucet(std::cmp::max(
+                config.max_susdc_amount,
+                config.gas_susdc_amount,
+            ))
+            .await?;
         Ok(driver)
     }
 
@@ -116,22 +121,14 @@ impl EvmChainDriver {
         nonce: u64,
         gas_price: u128,
     ) -> SeismicTransactionRequest {
-        let (to, value, calldata) = match input.asset {
-            FundingAsset::Susdc => (
-                self.faucet_address,
-                U256::ZERO,
-                Self::transfer_exact_data(input),
-            ),
-            FundingAsset::Native => (input.recipient, input.amount, Bytes::new()),
-        };
         SeismicTransactionRequest {
             inner: TransactionRequest {
                 from: Some(self.operator_address),
-                to: Some(TxKind::Call(to)),
+                to: Some(TxKind::Call(self.faucet_address)),
                 gas_price: Some(gas_price),
                 gas: Some(TRANSACTION_GAS_LIMIT),
-                value: Some(value),
-                input: TransactionInput::from(calldata),
+                value: Some(U256::ZERO),
+                input: TransactionInput::from(Self::transfer_exact_data(input)),
                 nonce: Some(nonce),
                 chain_id: Some(self.chain_id),
                 transaction_type: Some(LEGACY_TRANSACTION_TYPE),
@@ -333,7 +330,7 @@ fn chain_error(error: impl std::fmt::Display) -> ServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::FundingInput;
+    use crate::model::{FundingAsset, FundingInput};
     use alloy_sol_types::SolCall;
 
     const TRANSFER_EXACT_SELECTOR: [u8; 4] = [0xe1, 0x72, 0xa7, 0xc3];
@@ -414,20 +411,23 @@ mod tests {
     }
 
     #[test]
-    fn native_gas_request_is_transparent_legacy_value_transfer() {
+    fn gas_request_is_zero_value_susdc_transfer() {
         let driver = driver();
-        let mut native = input();
-        native.asset = FundingAsset::Native;
-        native.amount = U256::from(10_000_000_000_000_000u64);
-        let request = driver.transaction_request(&native, 9, 2_000_000_000);
+        let mut gas = input();
+        gas.asset = FundingAsset::SusdcGas;
+        gas.amount = U256::from(10_000u64);
+        let request = driver.transaction_request(&gas, 9, 2_000_000_000);
 
         assert_eq!(
             request.inner.transaction_type,
             Some(LEGACY_TRANSACTION_TYPE)
         );
-        assert_eq!(request.inner.to, Some(TxKind::Call(native.recipient)));
-        assert_eq!(request.inner.value, Some(native.amount));
-        assert_eq!(request.inner.input.input(), Some(&Bytes::new()));
+        assert_eq!(request.inner.to, Some(TxKind::Call(driver.faucet_address)));
+        assert_eq!(request.inner.value, Some(U256::ZERO));
+        let calldata = request.inner.input.input().unwrap();
+        let decoded = SeismicFaucet::transferExactCall::abi_decode(calldata).unwrap();
+        assert_eq!(decoded._recipient, gas.recipient);
+        assert_eq!(decoded._amount, gas.amount);
         assert!(request.seismic_elements.is_none());
     }
 

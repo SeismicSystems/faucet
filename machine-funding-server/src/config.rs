@@ -24,9 +24,9 @@ pub struct Config {
     pub funding_address: Address,
     pub faucet_address: Address,
     pub max_susdc_amount: U256,
-    pub gas_amount_wei: U256,
+    pub gas_susdc_amount: U256,
     pub global_susdc_budget: U256,
-    pub global_gas_budget_wei: U256,
+    pub global_gas_susdc_budget: U256,
     pub rate_limit: u64,
     pub rate_window: Duration,
     pub confirmations: u64,
@@ -68,19 +68,19 @@ impl Config {
             required("INTERNAL_FUNDING_MAX_SUSDC_AMOUNT")?,
             "INTERNAL_FUNDING_MAX_SUSDC_AMOUNT",
         )?;
-        let gas_amount_wei = parse_u256(
-            required("INTERNAL_FUNDING_GAS_AMOUNT_WEI")?,
-            "INTERNAL_FUNDING_GAS_AMOUNT_WEI",
+        let gas_susdc_amount = parse_u256(
+            required("INTERNAL_FUNDING_GAS_SUSDC_AMOUNT")?,
+            "INTERNAL_FUNDING_GAS_SUSDC_AMOUNT",
         )?;
         let global_susdc_budget = parse_u256(
             required("INTERNAL_FUNDING_GLOBAL_SUSDC_BUDGET")?,
             "INTERNAL_FUNDING_GLOBAL_SUSDC_BUDGET",
         )?;
-        let global_gas_budget_wei = parse_u256(
-            required("INTERNAL_FUNDING_GLOBAL_GAS_BUDGET_WEI")?,
-            "INTERNAL_FUNDING_GLOBAL_GAS_BUDGET_WEI",
+        let global_gas_susdc_budget = parse_u256(
+            required("INTERNAL_FUNDING_GLOBAL_GAS_SUSDC_BUDGET")?,
+            "INTERNAL_FUNDING_GLOBAL_GAS_SUSDC_BUDGET",
         )?;
-        if max_susdc_amount > global_susdc_budget || gas_amount_wei > global_gas_budget_wei {
+        if max_susdc_amount > global_susdc_budget || gas_susdc_amount > global_gas_susdc_budget {
             return Err(ConfigError::BudgetBelowTransfer);
         }
 
@@ -114,9 +114,9 @@ impl Config {
             faucet_address: Address::from_str(&required("FAUCET_ADDRESS")?)
                 .map_err(|_| ConfigError::Invalid("FAUCET_ADDRESS"))?,
             max_susdc_amount,
-            gas_amount_wei,
+            gas_susdc_amount,
             global_susdc_budget,
-            global_gas_budget_wei,
+            global_gas_susdc_budget,
             rate_limit: parse_u64(
                 lookup("INTERNAL_FUNDING_RATE_LIMIT"),
                 DEFAULT_RATE_LIMIT,
@@ -199,14 +199,11 @@ mod tests {
                 "0x0000000000000000000000000000000000000001".into(),
             ),
             ("INTERNAL_FUNDING_MAX_SUSDC_AMOUNT", "250000000".into()),
-            (
-                "INTERNAL_FUNDING_GAS_AMOUNT_WEI",
-                "10000000000000000".into(),
-            ),
+            ("INTERNAL_FUNDING_GAS_SUSDC_AMOUNT", "10000".into()),
             ("INTERNAL_FUNDING_GLOBAL_SUSDC_BUDGET", "1000000000".into()),
             (
-                "INTERNAL_FUNDING_GLOBAL_GAS_BUDGET_WEI",
-                "1000000000000000000".into(),
+                "INTERNAL_FUNDING_GLOBAL_GAS_SUSDC_BUDGET",
+                "10000000".into(),
             ),
         ])
     }

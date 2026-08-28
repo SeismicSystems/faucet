@@ -13,6 +13,8 @@ interface ISUSDCMintable {
 contract DeployScript is Script {
     /// @notice SUSDC to seed the faucet contract with (6 decimals)
     uint256 constant INITIAL_FAUCET_SEED = 1_000_000e6; // 1,000,000 SUSDC
+    /// @notice SUSDC reserved for the machine operator's transaction fees
+    uint256 constant INITIAL_MACHINE_GAS_SEED = 10e6; // 10 SUSDC
 
     function run() external {
         // Faucet account (also the SUSDC admin — mints directly into the faucet contract below)
@@ -40,6 +42,7 @@ contract DeployScript is Script {
 
         // Seed the faucet with SUSDC by admin-minting directly into it (no self-transfer round-trip)
         ISUSDCMintable(susdcAddress).mint(address(faucet), suint256(INITIAL_FAUCET_SEED));
+        ISUSDCMintable(susdcAddress).mint(machineFundingAccount, suint256(INITIAL_MACHINE_GAS_SEED));
 
         vm.stopBroadcast();
 
@@ -51,6 +54,7 @@ contract DeployScript is Script {
         console.log("Developer drip amount (SUSDC, 6d):", faucet.DEVELOPER_USDC_AMOUNT());
         console.log("Whitelist drip amount (SUSDC, 6d):", faucet.WHITELIST_USDC_AMOUNT());
         console.log("Initial seed (SUSDC, 6d):", INITIAL_FAUCET_SEED);
+        console.log("Machine gas seed (SUSDC, 6d):", INITIAL_MACHINE_GAS_SEED);
         console.log("Deployer/Faucet (super + approved operator):", faucetAccount);
         console.log("Reserve account (super operator):", reserveAccount);
         console.log("Machine funding account (exact-transfer operator):", machineFundingAccount);
