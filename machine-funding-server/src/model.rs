@@ -3,17 +3,17 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum FundingAsset {
     Susdc,
-    Native,
+    SusdcGas,
 }
 
 impl FundingAsset {
     pub fn key(self) -> &'static str {
         match self {
             Self::Susdc => "susdc",
-            Self::Native => "native",
+            Self::SusdcGas => "susdc_gas",
         }
     }
 }

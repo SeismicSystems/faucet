@@ -404,7 +404,7 @@ where
     fn global_budget(&self, asset: FundingAsset) -> U256 {
         match asset {
             FundingAsset::Susdc => self.config.global_susdc_budget,
-            FundingAsset::Native => self.config.global_gas_budget_wei,
+            FundingAsset::SusdcGas => self.config.global_gas_susdc_budget,
         }
     }
 }
