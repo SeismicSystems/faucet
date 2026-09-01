@@ -12,6 +12,7 @@ const DEFAULT_LOCK_WAIT_MS: u64 = 5_000;
 pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 45_000;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 45_000;
 const MINIMUM_TOKEN_LENGTH: usize = 32;
+const MINIMUM_GAS_SUSDC_AMOUNT: u64 = 100_000;
 const MAX_REDIS_INTEGER: u64 = i64::MAX as u64;
 
 #[derive(Clone)]
@@ -86,6 +87,8 @@ pub enum ConfigError {
     Invalid(&'static str),
     #[error("{0} must be at least {1} characters")]
     TooShort(&'static str, usize),
+    #[error("{0} must be at least {1}")]
+    BelowMinimum(&'static str, u64),
     #[error("single-transfer amount exceeds its global budget")]
     BudgetBelowTransfer,
 }
@@ -115,6 +118,12 @@ impl Config {
             required("INTERNAL_FUNDING_GAS_SUSDC_AMOUNT")?,
             "INTERNAL_FUNDING_GAS_SUSDC_AMOUNT",
         )?;
+        if gas_susdc_amount < U256::from(MINIMUM_GAS_SUSDC_AMOUNT) {
+            return Err(ConfigError::BelowMinimum(
+                "INTERNAL_FUNDING_GAS_SUSDC_AMOUNT",
+                MINIMUM_GAS_SUSDC_AMOUNT,
+            ));
+        }
         let global_susdc_budget = parse_u256(
             required("INTERNAL_FUNDING_GLOBAL_SUSDC_BUDGET")?,
             "INTERNAL_FUNDING_GLOBAL_SUSDC_BUDGET",
@@ -328,7 +337,10 @@ mod tests {
                 "0x0000000000000000000000000000000000000001".into(),
             ),
             ("INTERNAL_FUNDING_MAX_SUSDC_AMOUNT", "250000000".into()),
-            ("INTERNAL_FUNDING_GAS_SUSDC_AMOUNT", "10000".into()),
+            (
+                "INTERNAL_FUNDING_GAS_SUSDC_AMOUNT",
+                MINIMUM_GAS_SUSDC_AMOUNT.to_string(),
+            ),
             ("INTERNAL_FUNDING_GLOBAL_SUSDC_BUDGET", "1000000000".into()),
             (
                 "INTERNAL_FUNDING_GLOBAL_GAS_SUSDC_BUDGET",
@@ -437,6 +449,19 @@ mod tests {
         assert!(matches!(
             Config::from_lookup(|key| values.get(key).cloned()),
             Err(ConfigError::BudgetBelowTransfer)
+        ));
+    }
+
+    #[test]
+    fn rejects_gas_drips_too_small_for_a_signed_read() {
+        let mut values = valid_env();
+        values.insert("INTERNAL_FUNDING_GAS_SUSDC_AMOUNT", "99999".into());
+        assert!(matches!(
+            Config::from_lookup(|key| values.get(key).cloned()),
+            Err(ConfigError::BelowMinimum(
+                "INTERNAL_FUNDING_GAS_SUSDC_AMOUNT",
+                MINIMUM_GAS_SUSDC_AMOUNT
+            ))
         ));
     }
 

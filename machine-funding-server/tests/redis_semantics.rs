@@ -226,7 +226,7 @@ fn config(redis_url: String) -> Config {
         funding_address: Address::from_str("0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A").unwrap(),
         faucet_address: Address::with_last_byte(1),
         max_susdc_amount: U256::from(250_000_000u64),
-        gas_susdc_amount: U256::from(10_000u64),
+        gas_susdc_amount: U256::from(100_000u64),
         global_susdc_budget: U256::from(1_000_000_000u64),
         global_gas_susdc_budget: U256::from(10_000_000u64),
         erc20_usdc: Erc20UsdcActivation::Disabled,
