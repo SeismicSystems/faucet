@@ -113,17 +113,19 @@ where
     }
 
     async fn execute_inner(&self, input: FundingInput) -> Result<FundingResponse, ServiceError> {
-        let record_key = record_key(&input.idempotency_key);
-        let fingerprint = fingerprint(&input);
+        self.driver.validate_input(&input)?;
+        let asset_scope = self.asset_scope(&input)?;
+        let record_key = record_key(&input, &asset_scope);
+        let fingerprint = fingerprint(&input, &asset_scope);
         let queue_key = queue_key(self.driver.operator_key());
         let queued = FundingRecord::Queued {
             fingerprint: fingerprint.clone(),
             input: PersistedInput::from(&input),
         };
         let amount = input.amount.to_string();
-        let budget = self.global_budget(input.asset).to_string();
-        let recipient_rate_key = recipient_rate_key(&input);
-        let global_budget_key = global_budget_key(input.asset);
+        let budget = self.global_budget(input.asset)?.to_string();
+        let recipient_rate_key = recipient_rate_key(&input, &asset_scope);
+        let global_budget_key = global_budget_key(input.asset, &asset_scope);
         let reservation = self
             .store
             .reserve(Reservation {
@@ -134,8 +136,8 @@ where
                 record: &queued,
                 amount: &amount,
                 global_budget: &budget,
-                recipient_limit: self.config.rate_limit,
-                window_seconds: self.config.rate_window.as_secs(),
+                recipient_limit: self.rate_limit(input.asset)?,
+                window_seconds: self.rate_window(input.asset)?.as_secs(),
             })
             .await?;
         match reservation {
@@ -325,18 +327,42 @@ where
         };
         if matches!(
             record,
-            FundingRecord::Completed { .. } | FundingRecord::Failed { .. }
+            FundingRecord::Completed { .. }
+                | FundingRecord::Failed { .. }
+                | FundingRecord::Rejected { .. }
         ) {
             self.store.pop_queue_head(queue, record_key).await?;
             return Ok(record);
         }
 
+        let pending_input = match &record {
+            FundingRecord::Queued { input, .. } | FundingRecord::Prepared { input, .. } => {
+                FundingInput::try_from(input)?
+            }
+            _ => return Err(ServiceError::internal()),
+        };
+        if let Err(error) = self.driver.validate_input(&pending_input) {
+            let (fingerprint, input) = match record {
+                FundingRecord::Queued { fingerprint, input }
+                | FundingRecord::Prepared {
+                    fingerprint, input, ..
+                } => (fingerprint, input),
+                _ => return Err(ServiceError::internal()),
+            };
+            let rejected = FundingRecord::Rejected {
+                fingerprint,
+                input,
+                code: error.code,
+                message: error.message,
+            };
+            self.store.set_record(record_key, &rejected).await?;
+            self.store.pop_queue_head(queue, record_key).await?;
+            return Ok(rejected);
+        }
+
         if let FundingRecord::Queued { fingerprint, input } = record {
             let nonce = self.driver.pending_nonce().await?;
-            let transaction = self
-                .driver
-                .prepare(&FundingInput::try_from(&input)?, nonce)
-                .await?;
+            let transaction = self.driver.prepare(&pending_input, nonce).await?;
             record = FundingRecord::Prepared {
                 fingerprint,
                 input,
@@ -401,11 +427,44 @@ where
         Ok(terminal)
     }
 
-    fn global_budget(&self, asset: FundingAsset) -> U256 {
+    fn global_budget(&self, asset: FundingAsset) -> Result<U256, ServiceError> {
         match asset {
-            FundingAsset::Susdc => self.config.global_susdc_budget,
-            FundingAsset::SusdcGas => self.config.global_gas_susdc_budget,
+            FundingAsset::Susdc => Ok(self.config.global_susdc_budget),
+            FundingAsset::SusdcGas => Ok(self.config.global_gas_susdc_budget),
+            FundingAsset::Erc20Usdc => self.erc20_config().map(|config| config.global_budget),
         }
+    }
+
+    fn asset_scope(&self, input: &FundingInput) -> Result<String, ServiceError> {
+        match input.asset {
+            FundingAsset::Erc20Usdc => input
+                .deployment_identity
+                .as_ref()
+                .map(|identity| identity.scope())
+                .ok_or_else(erc20_unavailable),
+            FundingAsset::Susdc | FundingAsset::SusdcGas => Ok(input.asset.key().to_owned()),
+        }
+    }
+
+    fn rate_limit(&self, asset: FundingAsset) -> Result<u64, ServiceError> {
+        match asset {
+            FundingAsset::Erc20Usdc => self.erc20_config().map(|config| config.rate_limit),
+            FundingAsset::Susdc | FundingAsset::SusdcGas => Ok(self.config.rate_limit),
+        }
+    }
+
+    fn rate_window(&self, asset: FundingAsset) -> Result<Duration, ServiceError> {
+        match asset {
+            FundingAsset::Erc20Usdc => self.erc20_config().map(|config| config.rate_window),
+            FundingAsset::Susdc | FundingAsset::SusdcGas => Ok(self.config.rate_window),
+        }
+    }
+
+    fn erc20_config(&self) -> Result<&crate::config::Erc20UsdcConfig, ServiceError> {
+        self.config
+            .erc20_usdc
+            .enabled()
+            .ok_or_else(erc20_unavailable)
     }
 }
 
@@ -425,12 +484,29 @@ fn terminal_result(
             transaction_hash,
             ..
         } => Err(ServiceError::new(422, code, message).transaction(transaction_hash)),
+        FundingRecord::Rejected { code, message, .. } => Err(ServiceError::new(409, code, message)),
         FundingRecord::Queued { .. } | FundingRecord::Prepared { .. } => Ok(None),
     }
 }
 
-fn record_key(idempotency_key: &str) -> String {
-    format!("machine-funding:idempotency:{idempotency_key}")
+fn erc20_unavailable() -> ServiceError {
+    ServiceError::new(
+        503,
+        "erc20_usdc_unavailable",
+        "ERC20 USDC funding is unavailable",
+    )
+}
+
+fn record_key(input: &FundingInput, asset_scope: &str) -> String {
+    match input.asset {
+        FundingAsset::Erc20Usdc => format!(
+            "machine-funding:{asset_scope}:idempotency:{}",
+            input.idempotency_key
+        ),
+        FundingAsset::Susdc | FundingAsset::SusdcGas => {
+            format!("machine-funding:idempotency:{}", input.idempotency_key)
+        }
+    }
 }
 
 fn queue_key(operator_key: &str) -> String {
@@ -441,25 +517,39 @@ fn lock_key(operator_key: &str) -> String {
     format!("machine-funding:lock:{operator_key}")
 }
 
-fn recipient_rate_key(input: &FundingInput) -> String {
+fn recipient_rate_key(input: &FundingInput, asset_scope: &str) -> String {
     format!(
         "machine-funding:rate:{}:{}",
-        input.asset.key(),
+        asset_scope,
         input.recipient_text.to_ascii_lowercase()
     )
 }
 
-fn global_budget_key(asset: FundingAsset) -> String {
-    format!("machine-funding:budget:{}", asset.key())
+fn global_budget_key(asset: FundingAsset, asset_scope: &str) -> String {
+    match asset {
+        FundingAsset::Erc20Usdc => format!("machine-funding:budget:{asset_scope}"),
+        FundingAsset::Susdc | FundingAsset::SusdcGas => {
+            format!("machine-funding:budget:{}", asset.key())
+        }
+    }
 }
 
-fn fingerprint(input: &FundingInput) -> String {
-    let value = format!(
-        "{}\n{}\n{}\n{}",
-        input.asset.key(),
-        input.recipient_text.to_ascii_lowercase(),
-        input.amount,
-        input.reason
-    );
+fn fingerprint(input: &FundingInput, asset_scope: &str) -> String {
+    let value = match input.asset {
+        FundingAsset::Erc20Usdc => format!(
+            "{}\n{}\n{}\n{}",
+            asset_scope,
+            input.recipient_text.to_ascii_lowercase(),
+            input.amount,
+            input.reason
+        ),
+        FundingAsset::Susdc | FundingAsset::SusdcGas => format!(
+            "{}\n{}\n{}\n{}",
+            input.asset.key(),
+            input.recipient_text.to_ascii_lowercase(),
+            input.amount,
+            input.reason
+        ),
+    };
     hex::encode(Sha256::digest(value.as_bytes()))
 }

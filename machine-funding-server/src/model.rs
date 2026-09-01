@@ -7,6 +7,7 @@ use thiserror::Error;
 pub enum FundingAsset {
     Susdc,
     SusdcGas,
+    Erc20Usdc,
 }
 
 impl FundingAsset {
@@ -14,6 +15,7 @@ impl FundingAsset {
         match self {
             Self::Susdc => "susdc",
             Self::SusdcGas => "susdc_gas",
+            Self::Erc20Usdc => "erc20_usdc",
         }
     }
 }
@@ -21,6 +23,7 @@ impl FundingAsset {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FundingInput {
     pub asset: FundingAsset,
+    pub deployment_identity: Option<Erc20DeploymentIdentity>,
     pub idempotency_key: String,
     pub recipient: Address,
     pub recipient_text: String,
@@ -29,8 +32,32 @@ pub struct FundingInput {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Erc20DeploymentIdentity {
+    pub chain_id: u64,
+    pub token_address: String,
+    pub faucet_address: String,
+    pub operator_address: String,
+    pub reserve_address: String,
+}
+
+impl Erc20DeploymentIdentity {
+    pub fn scope(&self) -> String {
+        format!(
+            "erc20_usdc:{}:{}:{}:{}:{}",
+            self.chain_id,
+            self.token_address.to_ascii_lowercase(),
+            self.faucet_address.to_ascii_lowercase(),
+            self.operator_address.to_ascii_lowercase(),
+            self.reserve_address.to_ascii_lowercase()
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PersistedInput {
     pub asset: FundingAsset,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_identity: Option<Erc20DeploymentIdentity>,
     pub idempotency_key: String,
     pub recipient: String,
     pub amount: String,
@@ -41,6 +68,7 @@ impl From<&FundingInput> for PersistedInput {
     fn from(input: &FundingInput) -> Self {
         Self {
             asset: input.asset,
+            deployment_identity: input.deployment_identity.clone(),
             idempotency_key: input.idempotency_key.clone(),
             recipient: input.recipient_text.clone(),
             amount: input.amount.to_string(),
@@ -61,6 +89,7 @@ impl TryFrom<&PersistedInput> for FundingInput {
             U256::from_str_radix(&input.amount, 10).map_err(|_| ServiceError::internal())?;
         Ok(Self {
             asset: input.asset,
+            deployment_identity: input.deployment_identity.clone(),
             idempotency_key: input.idempotency_key.clone(),
             recipient,
             recipient_text: input.recipient.clone(),
@@ -112,6 +141,12 @@ pub enum FundingRecord {
         message: String,
         transaction_hash: String,
     },
+    Rejected {
+        fingerprint: String,
+        input: PersistedInput,
+        code: String,
+        message: String,
+    },
 }
 
 impl FundingRecord {
@@ -120,7 +155,8 @@ impl FundingRecord {
             Self::Queued { fingerprint, .. }
             | Self::Prepared { fingerprint, .. }
             | Self::Completed { fingerprint, .. }
-            | Self::Failed { fingerprint, .. } => fingerprint,
+            | Self::Failed { fingerprint, .. }
+            | Self::Rejected { fingerprint, .. } => fingerprint,
         }
     }
 }
