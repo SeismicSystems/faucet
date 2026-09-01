@@ -10,6 +10,12 @@ const artifactDisplayPath =
 
 type AbiItem = Record<string, unknown> & { type?: string };
 
+type AbiFunction = AbiItem & {
+  type: "function";
+  name: string;
+  inputs?: Array<{ type: string }>;
+};
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(canonicalize);
@@ -71,3 +77,67 @@ if (!artifact || !Array.isArray(artifact.abi)) {
 
 assertCurrentAbi("frontend", frontendAbi, artifact.abi);
 assertCurrentAbi("community-frontend", communityAbi, artifact.abi);
+
+async function artifactAbi(relativePath: string): Promise<AbiItem[]> {
+  const path = new URL(`../${relativePath}`, import.meta.url);
+  const file = Bun.file(path);
+  if (!(await file.exists())) {
+    throw new Error(`Missing contract artifact ${relativePath}; run sforge build first`);
+  }
+  const value = await file.json();
+  if (!value || !Array.isArray(value.abi)) {
+    throw new Error(`Missing contract ABI in ${relativePath}; run sforge build first`);
+  }
+  return value.abi;
+}
+
+function functionSignatures(abi: readonly AbiItem[]): Set<string> {
+  return new Set(
+    abi
+      .filter((item): item is AbiFunction => item.type === "function")
+      .map(
+        (item) =>
+          `${item.name}(${(item.inputs ?? []).map((input) => input.type).join(",")})`,
+      ),
+  );
+}
+
+function assertFunctions(
+  name: string,
+  abi: readonly AbiItem[],
+  required: readonly string[],
+): void {
+  const signatures = functionSignatures(abi);
+  const missing = required.filter((signature) => !signatures.has(signature));
+  if (missing.length === 0) {
+    return;
+  }
+  console.error(`${name} ABI is missing required functions:`, missing.join(", "));
+  process.exitCode = 1;
+}
+
+const erc20UsdcAbi = await artifactAbi(
+  "contracts/out/TestnetUSDC.sol/TestnetUSDC.json",
+);
+assertFunctions("TestnetUSDC", erc20UsdcAbi, [
+  "allowance(address,address)",
+  "approve(address,uint256)",
+  "balanceOf(address)",
+  "decimals()",
+  "mint(address,uint256)",
+  "owner()",
+  "transfer(address,uint256)",
+  "transferFrom(address,address,uint256)",
+]);
+
+const erc20FaucetAbi = await artifactAbi(
+  "contracts/out/ERC20USDCFaucet.sol/ERC20USDCFaucet.json",
+);
+assertFunctions("ERC20USDCFaucet", erc20FaucetAbi, [
+  "MAX_EXACT_TRANSFER_AMOUNT()",
+  "machineOperators(address)",
+  "superOperators(address)",
+  "transferExact(address,uint256)",
+  "updateSuperOperator(address,bool)",
+  "usdc()",
+]);

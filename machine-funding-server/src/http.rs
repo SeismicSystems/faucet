@@ -27,7 +27,29 @@ use subtle::ConstantTimeEq;
 const IDEMPOTENCY_PATTERN: &str = r"^[A-Za-z0-9._:-]{1,128}$";
 const REASON_PATTERN: &str = r"^[A-Za-z0-9._:-]{1,64}$";
 
-pub fn router<S, D>(service: FundingService<S, D>) -> Router
+pub enum Erc20FundingService<S, D> {
+    Disabled,
+    Unavailable,
+    Enabled(Box<FundingService<S, D>>),
+}
+
+struct RouterState<S, D> {
+    legacy: FundingService<S, D>,
+    erc20_usdc: Erc20FundingService<S, D>,
+}
+
+pub fn router<S, D>(legacy: FundingService<S, D>) -> Router
+where
+    S: FundingStore,
+    D: ChainDriver,
+{
+    router_with_erc20(legacy, Erc20FundingService::Disabled)
+}
+
+pub fn router_with_erc20<S, D>(
+    legacy: FundingService<S, D>,
+    erc20_usdc: Erc20FundingService<S, D>,
+) -> Router
 where
     S: FundingStore,
     D: ChainDriver,
@@ -37,11 +59,19 @@ where
         .route("/api/internal/readiness", get(readiness::<S, D>))
         .route("/api/internal/transfers", post(transfer::<S, D>))
         .route("/api/internal/gas", post(gas::<S, D>))
-        .with_state(Arc::new(service))
+        .route(
+            "/api/internal/erc20-usdc/transfers",
+            post(erc20_usdc_transfer::<S, D>),
+        )
+        .route(
+            "/api/internal/erc20-usdc/readiness",
+            get(erc20_usdc_readiness::<S, D>),
+        )
+        .with_state(Arc::new(RouterState { legacy, erc20_usdc }))
 }
 
 async fn transfer<S, D>(
-    State(service): State<Arc<FundingService<S, D>>>,
+    State(state): State<Arc<RouterState<S, D>>>,
     headers: HeaderMap,
     payload: Result<Json<SusdcRequest>, JsonRejection>,
 ) -> Result<Json<FundingResponse>, ServiceError>
@@ -49,6 +79,7 @@ where
     S: FundingStore,
     D: ChainDriver,
 {
+    let service = &state.legacy;
     authorize(&headers, &service.config().token)?;
     let Json(request) = payload.map_err(invalid_json)?;
     let common = validate_common(request.idempotency_key, request.recipient, request.reason)?;
@@ -64,7 +95,7 @@ where
 }
 
 async fn gas<S, D>(
-    State(service): State<Arc<FundingService<S, D>>>,
+    State(state): State<Arc<RouterState<S, D>>>,
     headers: HeaderMap,
     payload: Result<Json<GasRequest>, JsonRejection>,
 ) -> Result<Json<FundingResponse>, ServiceError>
@@ -72,6 +103,7 @@ where
     S: FundingStore,
     D: ChainDriver,
 {
+    let service = &state.legacy;
     authorize(&headers, &service.config().token)?;
     let Json(request) = payload.map_err(invalid_json)?;
     let common = validate_common(request.idempotency_key, request.recipient, request.reason)?;
@@ -85,21 +117,94 @@ where
         .map(Json)
 }
 
+async fn erc20_usdc_transfer<S, D>(
+    State(state): State<Arc<RouterState<S, D>>>,
+    headers: HeaderMap,
+    payload: Result<Json<SusdcRequest>, JsonRejection>,
+) -> Result<Json<FundingResponse>, ServiceError>
+where
+    S: FundingStore,
+    D: ChainDriver,
+{
+    authorize(&headers, &state.legacy.config().token)?;
+    let service = erc20_service(&state)?;
+    let maximum = service
+        .config()
+        .erc20_usdc
+        .enabled()
+        .map(|config| config.max_amount)
+        .ok_or_else(erc20_unavailable)?;
+    let Json(request) = payload.map_err(invalid_json)?;
+    let common = validate_common(request.idempotency_key, request.recipient, request.reason)?;
+    let amount = parse_amount(&request.amount, maximum)?;
+    service
+        .execute(FundingInput {
+            asset: FundingAsset::Erc20Usdc,
+            deployment_identity: service
+                .config()
+                .erc20_usdc
+                .enabled()
+                .map(|config| config.identity(service.config().chain_id)),
+            amount,
+            ..common
+        })
+        .await
+        .map(Json)
+}
+
 async fn liveness() -> Json<Health> {
     Json(Health { status: "ok" })
 }
 
 async fn readiness<S, D>(
-    State(service): State<Arc<FundingService<S, D>>>,
+    State(state): State<Arc<RouterState<S, D>>>,
     headers: HeaderMap,
 ) -> Result<Json<Health>, ServiceError>
 where
     S: FundingStore,
     D: ChainDriver,
 {
+    let service = &state.legacy;
     authorize(&headers, &service.config().token)?;
     service.health().await?;
     Ok(Json(Health { status: "ok" }))
+}
+
+async fn erc20_usdc_readiness<S, D>(
+    State(state): State<Arc<RouterState<S, D>>>,
+    headers: HeaderMap,
+) -> Result<Json<Health>, ServiceError>
+where
+    S: FundingStore,
+    D: ChainDriver,
+{
+    authorize(&headers, &state.legacy.config().token)?;
+    erc20_service(&state)?.health().await?;
+    Ok(Json(Health { status: "ok" }))
+}
+
+fn erc20_service<S, D>(state: &RouterState<S, D>) -> Result<&FundingService<S, D>, ServiceError>
+where
+    S: FundingStore,
+    D: ChainDriver,
+{
+    match &state.erc20_usdc {
+        Erc20FundingService::Enabled(service) => Ok(service),
+        Erc20FundingService::Disabled => Err(ServiceError::new(
+            404,
+            "erc20_usdc_disabled",
+            "ERC20 USDC funding is not enabled",
+        )),
+        Erc20FundingService::Unavailable => Err(erc20_unavailable()),
+    }
+}
+
+fn erc20_unavailable() -> ServiceError {
+    ServiceError::new(
+        503,
+        "erc20_usdc_unavailable",
+        "ERC20 USDC funding is unavailable",
+    )
 }
 
 #[derive(Serialize)]
@@ -131,12 +236,10 @@ fn validate_common(
     recipient_text: String,
     reason: String,
 ) -> Result<FundingInput, ServiceError> {
-    static IDEMPOTENCY: OnceLock<Regex> = OnceLock::new();
-    static REASON: OnceLock<Regex> = OnceLock::new();
-    if !IDEMPOTENCY
-        .get_or_init(|| Regex::new(IDEMPOTENCY_PATTERN).unwrap())
-        .is_match(&idempotency_key)
-    {
+    static IDEMPOTENCY: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+    static REASON: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+    let idempotency_pattern = compiled_pattern(&IDEMPOTENCY, IDEMPOTENCY_PATTERN)?;
+    if !idempotency_pattern.is_match(&idempotency_key) {
         return Err(ServiceError::new(
             400,
             "invalid_idempotency_key",
@@ -157,10 +260,8 @@ fn validate_common(
             "recipient must be a non-zero EVM address",
         ));
     }
-    if !REASON
-        .get_or_init(|| Regex::new(REASON_PATTERN).unwrap())
-        .is_match(&reason)
-    {
+    let reason_pattern = compiled_pattern(&REASON, REASON_PATTERN)?;
+    if !reason_pattern.is_match(&reason) {
         return Err(ServiceError::new(
             400,
             "invalid_reason",
@@ -169,12 +270,25 @@ fn validate_common(
     }
     Ok(FundingInput {
         asset: FundingAsset::Susdc,
+        deployment_identity: None,
         idempotency_key,
         recipient,
         recipient_text: recipient.to_checksum(None),
         amount: U256::ZERO,
         reason,
     })
+}
+
+fn compiled_pattern<'a>(
+    cell: &'a OnceLock<Result<Regex, regex::Error>>,
+    pattern: &str,
+) -> Result<&'a Regex, ServiceError> {
+    cell.get_or_init(|| Regex::new(pattern))
+        .as_ref()
+        .map_err(|error| {
+            tracing::error!(%error, "machine funding validation pattern is invalid");
+            ServiceError::internal()
+        })
 }
 
 fn parse_amount(value: &str, maximum: U256) -> Result<U256, ServiceError> {

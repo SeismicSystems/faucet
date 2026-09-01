@@ -146,6 +146,12 @@ deploy_machine_faucet_server() (
         -H "Authorization: Bearer $INTERNAL_FUNDING_TOKEN" \
         http://127.0.0.1:3002/api/internal/readiness
     echo
+    if [ "${INTERNAL_FUNDING_ERC20_USDC_ENABLED:-false}" = true ]; then
+        curl --fail --silent --show-error \
+            -H "Authorization: Bearer $INTERNAL_FUNDING_TOKEN" \
+            http://127.0.0.1:3002/api/internal/erc20-usdc/readiness
+        echo
+    fi
 )
 
 deploy_contracts() (
@@ -197,4 +203,82 @@ deploy_contracts() (
     echo "deployed faucet contract: $faucet_address"
     echo "updated FAUCET_ADDRESS in frontend, community-frontend and machine-funding env files"
     echo "activate it with: deploy_frontend; deploy_community_frontend; deploy_machine_faucet_server"
+)
+
+deploy_erc20_usdc_contracts() (
+    set -e
+    _faucet_lock_acquire deploy_erc20_usdc_contracts
+    frontend_env=$_faucet_repo/frontend/.env
+    machine_env=$_faucet_repo/.env.machine-funding
+
+    _faucet_require_file "$frontend_env"
+    _faucet_require_file "$machine_env"
+    _faucet_require_command jq
+    _faucet_require_command scast
+    _faucet_require_command sforge
+
+    set -a
+    source "$frontend_env"
+    source "$machine_env"
+    set +a
+    _faucet_require_env RPC_URL
+    _faucet_require_env FAUCET_PRIVATE_KEY
+    _faucet_require_env INTERNAL_FUNDING_ERC20_USDC_ADDRESS
+    _faucet_require_env INTERNAL_FUNDING_ERC20_USDC_PRIVATE_KEY
+    _faucet_require_env ERC20_USDC_RESERVE_ADDRESS
+    _faucet_require_env INTERNAL_FUNDING_MAX_ERC20_USDC_AMOUNT
+    _faucet_require_env INTERNAL_FUNDING_GLOBAL_ERC20_USDC_BUDGET
+
+    _faucet_set_env_value "$machine_env" INTERNAL_FUNDING_ERC20_USDC_ENABLED false
+
+    cd "$_faucet_repo/contracts"
+    sforge script script/DeployERC20USDC.s.sol \
+        --rpc-url "$RPC_URL" \
+        --broadcast \
+        --private-key "$FAUCET_PRIVATE_KEY" \
+        --unsafe-private-storage
+
+    chain_id=$(scast chain-id --rpc-url "$RPC_URL")
+    broadcast=$_faucet_repo/contracts/broadcast/DeployERC20USDC.s.sol/$chain_id/run-latest.json
+    _faucet_require_file "$broadcast"
+    usdc_address=$(jq -er '
+        [.transactions[]
+            | select(.contractName == "TestnetUSDC")
+            | .contractAddress
+            | select(. != null)]
+        | last
+    ' "$broadcast")
+    erc20_faucet_address=$(jq -er '
+        [.transactions[]
+            | select(.contractName == "ERC20USDCFaucet")
+            | .contractAddress
+            | select(. != null)]
+        | last
+    ' "$broadcast")
+
+    [[ "$usdc_address" =~ ^0x[0-9a-fA-F]{40}$ ]] || {
+        echo "invalid ERC20 USDC address in $broadcast: $usdc_address" >&2
+        exit 1
+    }
+    [[ "$erc20_faucet_address" =~ ^0x[0-9a-fA-F]{40}$ ]] || {
+        echo "invalid ERC20 USDC faucet address in $broadcast: $erc20_faucet_address" >&2
+        exit 1
+    }
+
+    _faucet_set_env_value "$machine_env" ERC20_USDC_TOKEN_ADDRESS "$usdc_address"
+    _faucet_set_env_value "$machine_env" ERC20_USDC_FAUCET_ADDRESS "$erc20_faucet_address"
+
+    cd "$_faucet_repo"
+    cargo build --release --locked -p faucet-machine-funding
+    INTERNAL_FUNDING_ERC20_USDC_ENABLED=true \
+        ERC20_USDC_TOKEN_ADDRESS="$usdc_address" \
+        ERC20_USDC_FAUCET_ADDRESS="$erc20_faucet_address" \
+        target/release/faucet-machine-funding --check-erc20-usdc
+
+    _faucet_set_env_value "$machine_env" INTERNAL_FUNDING_ERC20_USDC_ENABLED true
+
+    echo "deployed standard ERC20 USDC: $usdc_address"
+    echo "deployed independent ERC20 USDC faucet: $erc20_faucet_address"
+    echo "ERC20 USDC preflight passed and configuration is enabled in $machine_env"
+    echo "activate it with: deploy_machine_faucet_server"
 )

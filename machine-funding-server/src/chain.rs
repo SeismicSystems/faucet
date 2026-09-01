@@ -1,6 +1,6 @@
 use crate::{
-    config::Config,
-    model::{ChainResult, FundingInput, PreparedTransaction, ServiceError},
+    config::{Config, Erc20UsdcConfig},
+    model::{ChainResult, FundingAsset, FundingInput, PreparedTransaction, ServiceError},
 };
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::TransactionBuilder;
@@ -38,11 +38,30 @@ sol! {
         function superOperators(address operator) external view returns (bool);
         function MAX_EXACT_TRANSFER_AMOUNT() external view returns (uint256);
     }
+
+    #[sol(rpc)]
+    interface ERC20USDCFaucet {
+        function transferExact(address recipient, uint256 amount) external;
+        function machineOperators(address operator) external view returns (bool);
+        function superOperators(address operator) external view returns (bool);
+        function MAX_EXACT_TRANSFER_AMOUNT() external view returns (uint256);
+        function usdc() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface ERC20USDC {
+        function decimals() external view returns (uint8);
+        function balanceOf(address account) external view returns (uint256);
+        function owner() external view returns (address);
+    }
 }
 
 #[async_trait]
 pub trait ChainDriver: Clone + Send + Sync + 'static {
     fn operator_key(&self) -> &str;
+    fn validate_input(&self, _input: &FundingInput) -> Result<(), ServiceError> {
+        Ok(())
+    }
     async fn pending_nonce(&self) -> Result<u64, ServiceError>;
     async fn prepare(
         &self,
@@ -66,6 +85,7 @@ pub struct EvmChainDriver {
     operator_key: String,
     confirmations: u64,
     receipt_timeout: Duration,
+    erc20_usdc: Option<Erc20UsdcConfig>,
 }
 
 impl EvmChainDriver {
@@ -96,6 +116,7 @@ impl EvmChainDriver {
             operator_key,
             confirmations: config.confirmations,
             receipt_timeout: config.receipt_timeout,
+            erc20_usdc: None,
         };
         driver
             .validate_faucet(std::cmp::max(
@@ -106,13 +127,68 @@ impl EvmChainDriver {
         Ok(driver)
     }
 
-    fn transfer_exact_data(input: &FundingInput) -> Bytes {
-        SeismicFaucet::transferExactCall {
-            _recipient: input.recipient,
-            _amount: input.amount,
+    pub async fn connect_erc20_usdc(
+        config: &Config,
+        erc20_usdc: &Erc20UsdcConfig,
+    ) -> Result<Self, ServiceError> {
+        let rpc_url = Url::parse(&config.rpc_url).map_err(chain_error)?;
+        let provider = SeismicProviderBuilder::new().connect_http(rpc_url);
+        let chain_id = rpc_timeout(provider.get_chain_id()).await?;
+        if chain_id != config.chain_id {
+            return Err(chain_error(format!(
+                "RPC chain id {chain_id} does not match configured chain id {}",
+                config.chain_id
+            )));
         }
-        .abi_encode()
-        .into()
+        let signer = PrivateKeySigner::from_str(&erc20_usdc.private_key).map_err(chain_error)?;
+        let operator_address = signer.address();
+        if operator_address != erc20_usdc.funding_address {
+            return Err(chain_error(
+                "INTERNAL_FUNDING_ERC20_USDC_PRIVATE_KEY does not match INTERNAL_FUNDING_ERC20_USDC_ADDRESS",
+            ));
+        }
+        let operator_key = format!("{chain_id}:{operator_address:#x}");
+        let driver = Self {
+            provider,
+            wallet: SeismicWallet::from(signer),
+            operator_address,
+            faucet_address: config.faucet_address,
+            chain_id,
+            operator_key,
+            confirmations: config.confirmations,
+            receipt_timeout: config.receipt_timeout,
+            erc20_usdc: Some(erc20_usdc.clone()),
+        };
+        driver.validate_erc20_usdc(erc20_usdc).await?;
+        Ok(driver)
+    }
+
+    fn transfer_exact_data(input: &FundingInput) -> Bytes {
+        match input.asset {
+            FundingAsset::Susdc | FundingAsset::SusdcGas => SeismicFaucet::transferExactCall {
+                _recipient: input.recipient,
+                _amount: input.amount,
+            }
+            .abi_encode()
+            .into(),
+            FundingAsset::Erc20Usdc => ERC20USDCFaucet::transferExactCall {
+                recipient: input.recipient,
+                amount: input.amount,
+            }
+            .abi_encode()
+            .into(),
+        }
+    }
+
+    fn transfer_target(&self, asset: FundingAsset) -> Result<Address, ServiceError> {
+        match asset {
+            FundingAsset::Susdc | FundingAsset::SusdcGas => Ok(self.faucet_address),
+            FundingAsset::Erc20Usdc => self
+                .erc20_usdc
+                .as_ref()
+                .map(|config| config.faucet_address)
+                .ok_or_else(deployment_identity_error),
+        }
     }
 
     fn transaction_request(
@@ -120,11 +196,11 @@ impl EvmChainDriver {
         input: &FundingInput,
         nonce: u64,
         gas_price: u128,
-    ) -> SeismicTransactionRequest {
-        SeismicTransactionRequest {
+    ) -> Result<SeismicTransactionRequest, ServiceError> {
+        Ok(SeismicTransactionRequest {
             inner: TransactionRequest {
                 from: Some(self.operator_address),
-                to: Some(TxKind::Call(self.faucet_address)),
+                to: Some(TxKind::Call(self.transfer_target(input.asset)?)),
                 gas_price: Some(gas_price),
                 gas: Some(TRANSACTION_GAS_LIMIT),
                 value: Some(U256::ZERO),
@@ -135,7 +211,7 @@ impl EvmChainDriver {
                 ..Default::default()
             },
             seismic_elements: None,
-        }
+        })
     }
 
     async fn receipt_result(&self, hash: B256) -> Result<ChainResult, ServiceError> {
@@ -145,10 +221,12 @@ impl EvmChainDriver {
                 match receipt_status(receipt.as_ref()) {
                     Some(ChainResult::Reverted) => return Ok(ChainResult::Reverted),
                     Some(ChainResult::Success) => {
-                        let receipt_block = receipt
+                        let Some(receipt_block) = receipt
                             .as_ref()
                             .and_then(|confirmed| confirmed.block_number)
-                            .expect("receipt_status requires a block number");
+                        else {
+                            return Err(ServiceError::internal());
+                        };
                         let latest_block = rpc_timeout(self.provider.get_block_number()).await?;
                         let required_block =
                             receipt_block.saturating_add(self.confirmations.saturating_sub(1));
@@ -201,13 +279,93 @@ impl EvmChainDriver {
         Ok(())
     }
 
+    async fn validate_erc20_usdc(&self, config: &Erc20UsdcConfig) -> Result<(), ServiceError> {
+        let token_code =
+            rpc_timeout(async { self.provider.get_code_at(config.token_address).await }).await?;
+        if token_code.is_empty() {
+            return Err(chain_error(
+                "ERC20_USDC_TOKEN_ADDRESS has no deployed bytecode",
+            ));
+        }
+        let faucet_code =
+            rpc_timeout(async { self.provider.get_code_at(config.faucet_address).await }).await?;
+        if faucet_code.is_empty() {
+            return Err(chain_error(
+                "ERC20_USDC_FAUCET_ADDRESS has no deployed bytecode",
+            ));
+        }
+
+        let faucet = ERC20USDCFaucet::new(config.faucet_address, &self.provider);
+        let configured_token = rpc_timeout(async { faucet.usdc().call().await }).await?;
+        if configured_token != config.token_address {
+            return Err(chain_error(
+                "ERC20 USDC faucet token does not match ERC20_USDC_TOKEN_ADDRESS",
+            ));
+        }
+        let machine_operator =
+            rpc_timeout(async { faucet.machineOperators(self.operator_address).call().await })
+                .await?;
+        if !machine_operator {
+            return Err(chain_error(
+                "internal funding signer is not an ERC20 USDC machine operator",
+            ));
+        }
+        let super_operator =
+            rpc_timeout(async { faucet.superOperators(self.operator_address).call().await })
+                .await?;
+        if super_operator {
+            return Err(chain_error(
+                "internal funding signer must not be an ERC20 USDC super operator",
+            ));
+        }
+        let reserve_super_operator =
+            rpc_timeout(async { faucet.superOperators(config.reserve_address).call().await })
+                .await?;
+        if !reserve_super_operator {
+            return Err(chain_error(
+                "ERC20 USDC reserve is not a faucet super operator",
+            ));
+        }
+        let on_chain_max =
+            rpc_timeout(async { faucet.MAX_EXACT_TRANSFER_AMOUNT().call().await }).await?;
+        if config.max_amount > on_chain_max {
+            return Err(chain_error(format!(
+                "configured ERC20 USDC maximum {} exceeds contract maximum {on_chain_max}",
+                config.max_amount
+            )));
+        }
+
+        let token = ERC20USDC::new(config.token_address, &self.provider);
+        let token_owner = rpc_timeout(async { token.owner().call().await }).await?;
+        if token_owner != config.reserve_address {
+            return Err(chain_error(
+                "ERC20 USDC reserve does not own the token contract",
+            ));
+        }
+        let decimals = rpc_timeout(async { token.decimals().call().await }).await?;
+        if decimals != 6 {
+            return Err(chain_error(format!(
+                "ERC20 USDC token has {decimals} decimals; expected 6"
+            )));
+        }
+        let faucet_balance =
+            rpc_timeout(async { token.balanceOf(config.faucet_address).call().await }).await?;
+        if faucet_balance < config.max_amount {
+            return Err(chain_error(format!(
+                "ERC20 USDC faucet balance {faucet_balance} is below configured maximum {}",
+                config.max_amount
+            )));
+        }
+        Ok(())
+    }
+
     async fn sign_transaction(
         &self,
         input: &FundingInput,
         nonce: u64,
         gas_price: u128,
     ) -> Result<PreparedTransaction, ServiceError> {
-        let request = self.transaction_request(input, nonce, gas_price);
+        let request = self.transaction_request(input, nonce, gas_price)?;
         let envelope = TransactionBuilder::<SeismicReth>::build(request, &self.wallet)
             .await
             .map_err(chain_error)?;
@@ -225,6 +383,22 @@ impl EvmChainDriver {
 impl ChainDriver for EvmChainDriver {
     fn operator_key(&self) -> &str {
         &self.operator_key
+    }
+
+    fn validate_input(&self, input: &FundingInput) -> Result<(), ServiceError> {
+        match (input.asset, &self.erc20_usdc) {
+            (FundingAsset::Erc20Usdc, Some(config))
+                if input.deployment_identity.as_ref() == Some(&config.identity(self.chain_id)) =>
+            {
+                Ok(())
+            }
+            (FundingAsset::Susdc | FundingAsset::SusdcGas, None)
+                if input.deployment_identity.is_none() =>
+            {
+                Ok(())
+            }
+            _ => Err(deployment_identity_error()),
+        }
     }
 
     async fn pending_nonce(&self) -> Result<u64, ServiceError> {
@@ -283,7 +457,18 @@ impl ChainDriver for EvmChainDriver {
     }
 
     async fn health(&self) -> Result<(), ServiceError> {
-        rpc_timeout(self.provider.get_chain_id()).await.map(|_| ())
+        let Some(erc20_usdc) = &self.erc20_usdc else {
+            return rpc_timeout(self.provider.get_chain_id()).await.map(|_| ());
+        };
+        let chain_id = rpc_timeout(self.provider.get_chain_id()).await?;
+        if chain_id != self.chain_id {
+            return Err(chain_error(format!(
+                "RPC chain id changed from {} to {chain_id}",
+                self.chain_id
+            )));
+        }
+        self.validate_erc20_usdc(erc20_usdc).await?;
+        Ok(())
     }
 }
 
@@ -327,6 +512,14 @@ fn chain_error(error: impl std::fmt::Display) -> ServiceError {
     )
 }
 
+fn deployment_identity_error() -> ServiceError {
+    ServiceError::new(
+        409,
+        "deployment_identity_mismatch",
+        "Funding request belongs to a different contract deployment",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,12 +541,14 @@ mod tests {
             chain_id: 5124,
             confirmations: 1,
             receipt_timeout: Duration::from_millis(10),
+            erc20_usdc: None,
         }
     }
 
     fn input() -> FundingInput {
         FundingInput {
             asset: FundingAsset::Susdc,
+            deployment_identity: None,
             idempotency_key: "order-123".into(),
             recipient: Address::with_last_byte(0xa1),
             recipient_text: "0x00000000000000000000000000000000000000A1".into(),
@@ -416,7 +611,7 @@ mod tests {
         let mut gas = input();
         gas.asset = FundingAsset::SusdcGas;
         gas.amount = U256::from(10_000u64);
-        let request = driver.transaction_request(&gas, 9, 2_000_000_000);
+        let request = driver.transaction_request(&gas, 9, 2_000_000_000).unwrap();
 
         assert_eq!(
             request.inner.transaction_type,
@@ -429,6 +624,67 @@ mod tests {
         assert_eq!(decoded._recipient, gas.recipient);
         assert_eq!(decoded._amount, gas.amount);
         assert!(request.seismic_elements.is_none());
+    }
+
+    #[test]
+    fn erc20_usdc_request_targets_independent_faucet() {
+        let mut driver = driver();
+        let erc20_faucet = Address::with_last_byte(0x20);
+        driver.erc20_usdc = Some(Erc20UsdcConfig {
+            token_address: Address::with_last_byte(0x10),
+            faucet_address: erc20_faucet,
+            private_key: format!("0x{}", "1".repeat(64)),
+            funding_address: driver.operator_address,
+            reserve_address: Address::with_last_byte(0x30),
+            max_amount: U256::from(250_000_000u64),
+            global_budget: U256::from(1_000_000_000u64),
+            rate_limit: 10,
+            rate_window: Duration::from_secs(3_600),
+        });
+        let mut erc20 = input();
+        erc20.asset = FundingAsset::Erc20Usdc;
+        erc20.deployment_identity = driver
+            .erc20_usdc
+            .as_ref()
+            .map(|config| config.identity(driver.chain_id));
+        let request = driver
+            .transaction_request(&erc20, 9, 2_000_000_000)
+            .unwrap();
+
+        assert_eq!(request.inner.to, Some(TxKind::Call(erc20_faucet)));
+        assert_eq!(request.inner.value, Some(U256::ZERO));
+        let calldata = request.inner.input.input().unwrap();
+        let decoded = ERC20USDCFaucet::transferExactCall::abi_decode(calldata).unwrap();
+        assert_eq!(decoded.recipient, erc20.recipient);
+        assert_eq!(decoded.amount, erc20.amount);
+    }
+
+    #[test]
+    fn rejects_input_from_a_rotated_erc20_deployment() {
+        let mut driver = driver();
+        driver.erc20_usdc = Some(Erc20UsdcConfig {
+            token_address: Address::with_last_byte(0x10),
+            faucet_address: Address::with_last_byte(0x20),
+            private_key: format!("0x{}", "1".repeat(64)),
+            funding_address: driver.operator_address,
+            reserve_address: Address::with_last_byte(0x30),
+            max_amount: U256::from(250_000_000u64),
+            global_budget: U256::from(1_000_000_000u64),
+            rate_limit: 10,
+            rate_window: Duration::from_secs(3_600),
+        });
+        let mut erc20 = input();
+        erc20.asset = FundingAsset::Erc20Usdc;
+        erc20.deployment_identity = Some(crate::model::Erc20DeploymentIdentity {
+            chain_id: driver.chain_id,
+            token_address: Address::with_last_byte(0x11).to_checksum(None),
+            faucet_address: Address::with_last_byte(0x21).to_checksum(None),
+            operator_address: driver.operator_address.to_checksum(None),
+            reserve_address: Address::with_last_byte(0x30).to_checksum(None),
+        });
+
+        let error = driver.validate_input(&erc20).unwrap_err();
+        assert_eq!(error.code, "deployment_identity_mismatch");
     }
 
     #[test]
