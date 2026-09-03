@@ -293,8 +293,7 @@ deploy_erc20_usdc_contracts() (
 # Base reserve. No faucet contract is deployed on Base — the reserve key
 # transfers directly — so only the token address is recorded. The human must
 # have funded INTERNAL_FUNDING_BASE_ADDRESS with Base Sepolia ETH first; the
-# deployer key pays for the deployment itself. Uses stock foundry (forge/cast)
-# because Base is a standard EVM network.
+# deployer key pays for the deployment itself.
 deploy_base_erc20_usdc_contract() (
     set -e
     _faucet_lock_acquire deploy_base_erc20_usdc_contract
@@ -302,8 +301,8 @@ deploy_base_erc20_usdc_contract() (
 
     _faucet_require_file "$machine_env"
     _faucet_require_command jq
-    _faucet_require_command cast
-    _faucet_require_command forge
+    _faucet_require_command scast
+    _faucet_require_command sforge
 
     set -a
     source "$machine_env"
@@ -318,7 +317,7 @@ deploy_base_erc20_usdc_contract() (
     _faucet_require_env INTERNAL_FUNDING_GLOBAL_BASE_GAS_ETH_BUDGET
     _faucet_require_env INTERNAL_FUNDING_GLOBAL_BASE_ERC20_USDC_BUDGET
 
-    chain_id=$(cast chain-id --rpc-url "$BASE_RPC_URL")
+    chain_id=$(scast chain-id --rpc-url "$BASE_RPC_URL")
     [ "$chain_id" = "$BASE_CHAIN_ID" ] || {
         echo "BASE_RPC_URL reports chain id $chain_id, expected BASE_CHAIN_ID=$BASE_CHAIN_ID" >&2
         exit 1
@@ -327,7 +326,7 @@ deploy_base_erc20_usdc_contract() (
     _faucet_set_env_value "$machine_env" INTERNAL_FUNDING_BASE_ENABLED false
 
     cd "$_faucet_repo/contracts"
-    forge script script/DeployBaseTestnetUSDC.s.sol \
+    sforge script script/DeployBaseTestnetUSDC.s.sol \
         --rpc-url "$BASE_RPC_URL" \
         --broadcast \
         --private-key "$BASE_DEPLOYER_PRIVATE_KEY"
