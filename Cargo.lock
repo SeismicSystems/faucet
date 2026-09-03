@@ -175,6 +175,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "borsh",
+ "k256",
  "serde",
  "thiserror 2.0.20",
 ]
@@ -1777,6 +1778,7 @@ name = "faucet-machine-funding"
 version = "0.1.0"
 dependencies = [
  "alloy-chains",
+ "alloy-consensus",
  "alloy-contract",
  "alloy-eips",
  "alloy-json-rpc",

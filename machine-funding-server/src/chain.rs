@@ -1,6 +1,9 @@
 use crate::{
     config::{Config, Erc20UsdcConfig},
-    model::{ChainResult, FundingAsset, FundingInput, PreparedTransaction, ServiceError},
+    model::{
+        ChainResult, FundingAsset, FundingInput, PreparedTransaction, ReserveDiagnostic,
+        ServiceError,
+    },
 };
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::TransactionBuilder;
@@ -21,7 +24,7 @@ const LEGACY_TRANSACTION_TYPE: u8 = 0;
 const TRANSACTION_GAS_LIMIT: u64 = 500_000;
 const GAS_PRICE_MULTIPLIER: u128 = 2;
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const RPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const RPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINAL_BROADCAST_ERRORS: &[&str] = &[
     "insufficient funds",
     "intrinsic gas too low",
@@ -73,6 +76,11 @@ pub trait ChainDriver: Clone + Send + Sync + 'static {
         transaction: &PreparedTransaction,
     ) -> Result<ChainResult, ServiceError>;
     async fn health(&self) -> Result<(), ServiceError>;
+    /// Reserve balances for operators; `None` for drivers whose reserves are
+    /// held by a contract rather than the signer.
+    async fn reserve_diagnostic(&self) -> Result<Option<ReserveDiagnostic>, ServiceError> {
+        Ok(None)
+    }
 }
 
 #[derive(Clone)]
@@ -177,6 +185,7 @@ impl EvmChainDriver {
             }
             .abi_encode()
             .into(),
+            FundingAsset::BaseEth | FundingAsset::BaseErc20Usdc => Bytes::new(),
         }
     }
 
@@ -188,6 +197,7 @@ impl EvmChainDriver {
                 .as_ref()
                 .map(|config| config.faucet_address)
                 .ok_or_else(deployment_identity_error),
+            FundingAsset::BaseEth | FundingAsset::BaseErc20Usdc => Err(deployment_identity_error()),
         }
     }
 
@@ -393,7 +403,7 @@ impl ChainDriver for EvmChainDriver {
                 Ok(())
             }
             (FundingAsset::Susdc | FundingAsset::SusdcGas, None)
-                if input.deployment_identity.is_none() =>
+                if input.deployment_identity.is_none() && input.network_identity.is_none() =>
             {
                 Ok(())
             }
@@ -472,7 +482,7 @@ impl ChainDriver for EvmChainDriver {
     }
 }
 
-fn classify_broadcast_error(message: &str) -> Option<ChainResult> {
+pub(crate) fn classify_broadcast_error(message: &str) -> Option<ChainResult> {
     let lower = message.to_ascii_lowercase();
     TERMINAL_BROADCAST_ERRORS
         .iter()
@@ -491,7 +501,7 @@ fn receipt_status(receipt: Option<&SeismicTransactionReceipt>) -> Option<ChainRe
     }
 }
 
-async fn rpc_timeout<T, E>(
+pub(crate) async fn rpc_timeout<T, E>(
     future: impl std::future::Future<Output = Result<T, E>>,
 ) -> Result<T, ServiceError>
 where
@@ -503,7 +513,7 @@ where
         .map_err(chain_error)
 }
 
-fn chain_error(error: impl std::fmt::Display) -> ServiceError {
+pub(crate) fn chain_error(error: impl std::fmt::Display) -> ServiceError {
     tracing::error!(%error, "machine funding chain operation failed");
     ServiceError::new(
         502,
@@ -512,7 +522,7 @@ fn chain_error(error: impl std::fmt::Display) -> ServiceError {
     )
 }
 
-fn deployment_identity_error() -> ServiceError {
+pub(crate) fn deployment_identity_error() -> ServiceError {
     ServiceError::new(
         409,
         "deployment_identity_mismatch",
@@ -549,6 +559,7 @@ mod tests {
         FundingInput {
             asset: FundingAsset::Susdc,
             deployment_identity: None,
+            network_identity: None,
             idempotency_key: "order-123".into(),
             recipient: Address::with_last_byte(0xa1),
             recipient_text: "0x00000000000000000000000000000000000000A1".into(),

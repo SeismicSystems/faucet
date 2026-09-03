@@ -241,6 +241,35 @@ actor can consume it before other testers. Likewise, a poisoned queue can keep
 legitimate work behind low-value requests. Per-principal quotas and a bounded or
 fair queue are separate future controls.
 
+## Base Sepolia Funding
+
+The Base Sepolia routes (`/api/internal/base/gas`, `/api/internal/base/erc20-usdc/transfers`,
+`/api/internal/base/readiness`) reuse every existing control: the same nginx
+source-IP gate and bearer token, the same Redis reservation, idempotency, and
+operator serialization, and per-asset budgets and rate windows. What differs:
+
+- **The signer is the reserve.** There is no faucet contract on Base, so the
+  reserve key holds both the native ETH gas reserve and the ERC20 USDC supply
+  and transfers them directly. A stolen Base key drains both balances outright;
+  the containment is the small, explicitly funded reserve and the dedicated key.
+  `INTERNAL_FUNDING_BASE_PRIVATE_KEY` is refused when it matches a Seismic
+  funding key unless `INTERNAL_FUNDING_BASE_ALLOW_SHARED_KEY=true` is set with
+  explicit approval.
+- **Native gas is real value on other networks.** Base Sepolia ETH has no
+  real-world value, but the same key format on Base mainnet would. The chain id
+  is verified at connect time and on every readiness probe, and every Base
+  ledger key is scoped to `chain id + token + reserve`, so a mispointed RPC
+  fails closed rather than replaying a testnet ledger against another network.
+- **Reserve depletion is a diagnostic, not a surprise.** Startup preflight and
+  `/api/internal/base/readiness` compare both balances to configured floors
+  (`INTERNAL_FUNDING_BASE_ETH_RESERVE_FLOOR`,
+  `INTERNAL_FUNDING_BASE_ERC20_USDC_RESERVE_FLOOR`); readiness answers
+  `503 reserve_low` below either floor so an alert fires before a drip fails
+  on-chain with `insufficient funds`, which is otherwise a terminal `422`.
+- **EIP-1559 fees are estimated, not capped.** The estimate is doubled for
+  headroom without a configured ceiling, the same deferred control as the
+  Seismic gas price.
+
 ## Deferred Hardening
 
 ### Staging Hardening

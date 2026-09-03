@@ -152,6 +152,12 @@ deploy_machine_faucet_server() (
             http://127.0.0.1:3002/api/internal/erc20-usdc/readiness
         echo
     fi
+    if [ "${INTERNAL_FUNDING_BASE_ENABLED:-false}" = true ]; then
+        curl --fail --silent --show-error \
+            -H "Authorization: Bearer $INTERNAL_FUNDING_TOKEN" \
+            http://127.0.0.1:3002/api/internal/base/readiness
+        echo
+    fi
 )
 
 deploy_contracts() (
@@ -280,5 +286,78 @@ deploy_erc20_usdc_contracts() (
     echo "deployed standard ERC20 USDC: $usdc_address"
     echo "deployed independent ERC20 USDC faucet: $erc20_faucet_address"
     echo "ERC20 USDC preflight passed and configuration is enabled in $machine_env"
+    echo "activate it with: deploy_machine_faucet_server"
+)
+
+# Base Sepolia test USDC: a plain six-decimal ERC20 minted into the dedicated
+# Base reserve. No faucet contract is deployed on Base — the reserve key
+# transfers directly — so only the token address is recorded. The human must
+# have funded INTERNAL_FUNDING_BASE_ADDRESS with Base Sepolia ETH first; the
+# deployer key pays for the deployment itself. Uses stock foundry (forge/cast)
+# because Base is a standard EVM network.
+deploy_base_erc20_usdc_contract() (
+    set -e
+    _faucet_lock_acquire deploy_base_erc20_usdc_contract
+    machine_env=$_faucet_repo/.env.machine-funding
+
+    _faucet_require_file "$machine_env"
+    _faucet_require_command jq
+    _faucet_require_command cast
+    _faucet_require_command forge
+
+    set -a
+    source "$machine_env"
+    set +a
+    _faucet_require_env BASE_RPC_URL
+    _faucet_require_env BASE_CHAIN_ID
+    _faucet_require_env BASE_DEPLOYER_PRIVATE_KEY
+    _faucet_require_env INTERNAL_FUNDING_BASE_ADDRESS
+    _faucet_require_env INTERNAL_FUNDING_BASE_PRIVATE_KEY
+    _faucet_require_env INTERNAL_FUNDING_BASE_GAS_ETH_AMOUNT
+    _faucet_require_env INTERNAL_FUNDING_MAX_BASE_ERC20_USDC_AMOUNT
+    _faucet_require_env INTERNAL_FUNDING_GLOBAL_BASE_GAS_ETH_BUDGET
+    _faucet_require_env INTERNAL_FUNDING_GLOBAL_BASE_ERC20_USDC_BUDGET
+
+    chain_id=$(cast chain-id --rpc-url "$BASE_RPC_URL")
+    [ "$chain_id" = "$BASE_CHAIN_ID" ] || {
+        echo "BASE_RPC_URL reports chain id $chain_id, expected BASE_CHAIN_ID=$BASE_CHAIN_ID" >&2
+        exit 1
+    }
+
+    _faucet_set_env_value "$machine_env" INTERNAL_FUNDING_BASE_ENABLED false
+
+    cd "$_faucet_repo/contracts"
+    forge script script/DeployBaseTestnetUSDC.s.sol \
+        --rpc-url "$BASE_RPC_URL" \
+        --broadcast \
+        --private-key "$BASE_DEPLOYER_PRIVATE_KEY"
+
+    broadcast=$_faucet_repo/contracts/broadcast/DeployBaseTestnetUSDC.s.sol/$chain_id/run-latest.json
+    _faucet_require_file "$broadcast"
+    usdc_address=$(jq -er '
+        [.transactions[]
+            | select(.contractName == "TestnetUSDC")
+            | .contractAddress
+            | select(. != null)]
+        | last
+    ' "$broadcast")
+    [[ "$usdc_address" =~ ^0x[0-9a-fA-F]{40}$ ]] || {
+        echo "invalid Base ERC20 USDC address in $broadcast: $usdc_address" >&2
+        exit 1
+    }
+
+    _faucet_set_env_value "$machine_env" BASE_ERC20_USDC_TOKEN_ADDRESS "$usdc_address"
+
+    cd "$_faucet_repo"
+    cargo build --release --locked -p faucet-machine-funding
+    INTERNAL_FUNDING_BASE_ENABLED=true \
+        BASE_ERC20_USDC_TOKEN_ADDRESS="$usdc_address" \
+        target/release/faucet-machine-funding --check-base
+
+    _faucet_set_env_value "$machine_env" INTERNAL_FUNDING_BASE_ENABLED true
+
+    echo "deployed Base Sepolia test USDC: $usdc_address"
+    echo "Base preflight passed and configuration is enabled in $machine_env"
+    echo "record BASE_ERC20_USDC_ADDRESS=$usdc_address on the sandbox machine; integrations must read it from there, never hardcode it"
     echo "activate it with: deploy_machine_faucet_server"
 )

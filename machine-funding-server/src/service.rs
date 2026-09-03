@@ -3,7 +3,7 @@ use crate::{
     config::Config,
     model::{
         ChainResult, FundingAsset, FundingInput, FundingRecord, FundingResponse, PersistedInput,
-        ReservationResult, ServiceError,
+        ReservationResult, ReserveDiagnostic, ServiceError,
     },
     store::{FundingStore, Reservation},
 };
@@ -98,6 +98,11 @@ where
 
     pub async fn health(&self) -> Result<(), ServiceError> {
         tokio::try_join!(self.store.ping(), self.driver.health()).map(|_| ())
+    }
+
+    pub async fn reserve_diagnostic(&self) -> Result<Option<ReserveDiagnostic>, ServiceError> {
+        self.store.ping().await?;
+        self.driver.reserve_diagnostic().await
     }
 
     pub async fn execute(&self, input: FundingInput) -> Result<FundingResponse, ServiceError> {
@@ -432,9 +437,19 @@ where
             FundingAsset::Susdc => Ok(self.config.global_susdc_budget),
             FundingAsset::SusdcGas => Ok(self.config.global_gas_susdc_budget),
             FundingAsset::Erc20Usdc => self.erc20_config().map(|config| config.global_budget),
+            FundingAsset::BaseEth => self
+                .base_config()
+                .map(|config| config.global_gas_eth_budget),
+            FundingAsset::BaseErc20Usdc => self
+                .base_config()
+                .map(|config| config.global_erc20_usdc_budget),
         }
     }
 
+    /// Ledger scope for an input: Seismic assets are keyed by asset alone
+    /// (the pre-multi-network layout), ERC20 USDC by its contract deployment,
+    /// and Base assets by asset plus network identity — so every Base key,
+    /// budget, and rate window is bound to one chain, token, and reserve.
     fn asset_scope(&self, input: &FundingInput) -> Result<String, ServiceError> {
         match input.asset {
             FundingAsset::Erc20Usdc => input
@@ -442,6 +457,11 @@ where
                 .as_ref()
                 .map(|identity| identity.scope())
                 .ok_or_else(erc20_unavailable),
+            FundingAsset::BaseEth | FundingAsset::BaseErc20Usdc => input
+                .network_identity
+                .as_ref()
+                .map(|identity| format!("{}:{}", input.asset.key(), identity.scope()))
+                .ok_or_else(base_unavailable),
             FundingAsset::Susdc | FundingAsset::SusdcGas => Ok(input.asset.key().to_owned()),
         }
     }
@@ -449,6 +469,9 @@ where
     fn rate_limit(&self, asset: FundingAsset) -> Result<u64, ServiceError> {
         match asset {
             FundingAsset::Erc20Usdc => self.erc20_config().map(|config| config.rate_limit),
+            FundingAsset::BaseEth | FundingAsset::BaseErc20Usdc => {
+                self.base_config().map(|config| config.rate_limit)
+            }
             FundingAsset::Susdc | FundingAsset::SusdcGas => Ok(self.config.rate_limit),
         }
     }
@@ -456,6 +479,9 @@ where
     fn rate_window(&self, asset: FundingAsset) -> Result<Duration, ServiceError> {
         match asset {
             FundingAsset::Erc20Usdc => self.erc20_config().map(|config| config.rate_window),
+            FundingAsset::BaseEth | FundingAsset::BaseErc20Usdc => {
+                self.base_config().map(|config| config.rate_window)
+            }
             FundingAsset::Susdc | FundingAsset::SusdcGas => Ok(self.config.rate_window),
         }
     }
@@ -465,6 +491,10 @@ where
             .erc20_usdc
             .enabled()
             .ok_or_else(erc20_unavailable)
+    }
+
+    fn base_config(&self) -> Result<&crate::config::BaseConfig, ServiceError> {
+        self.config.base.enabled().ok_or_else(base_unavailable)
     }
 }
 
@@ -497,9 +527,13 @@ fn erc20_unavailable() -> ServiceError {
     )
 }
 
+pub(crate) fn base_unavailable() -> ServiceError {
+    ServiceError::new(503, "base_unavailable", "Base funding is unavailable")
+}
+
 fn record_key(input: &FundingInput, asset_scope: &str) -> String {
     match input.asset {
-        FundingAsset::Erc20Usdc => format!(
+        FundingAsset::Erc20Usdc | FundingAsset::BaseEth | FundingAsset::BaseErc20Usdc => format!(
             "machine-funding:{asset_scope}:idempotency:{}",
             input.idempotency_key
         ),
@@ -527,7 +561,9 @@ fn recipient_rate_key(input: &FundingInput, asset_scope: &str) -> String {
 
 fn global_budget_key(asset: FundingAsset, asset_scope: &str) -> String {
     match asset {
-        FundingAsset::Erc20Usdc => format!("machine-funding:budget:{asset_scope}"),
+        FundingAsset::Erc20Usdc | FundingAsset::BaseEth | FundingAsset::BaseErc20Usdc => {
+            format!("machine-funding:budget:{asset_scope}")
+        }
         FundingAsset::Susdc | FundingAsset::SusdcGas => {
             format!("machine-funding:budget:{}", asset.key())
         }
@@ -536,7 +572,7 @@ fn global_budget_key(asset: FundingAsset, asset_scope: &str) -> String {
 
 fn fingerprint(input: &FundingInput, asset_scope: &str) -> String {
     let value = match input.asset {
-        FundingAsset::Erc20Usdc => format!(
+        FundingAsset::Erc20Usdc | FundingAsset::BaseEth | FundingAsset::BaseErc20Usdc => format!(
             "{}\n{}\n{}\n{}",
             asset_scope,
             input.recipient_text.to_ascii_lowercase(),

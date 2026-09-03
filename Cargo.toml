@@ -13,6 +13,7 @@ axum = "0.7.9"
 seismic-alloy-network = { git = "https://github.com/SeismicSystems/seismic-alloy.git", rev = "c8fad0b93da53f2b423d2f6720abdb4a6cbb9082" }
 seismic-alloy-provider = { git = "https://github.com/SeismicSystems/seismic-alloy.git", rev = "c8fad0b93da53f2b423d2f6720abdb4a6cbb9082" }
 seismic-alloy-rpc-types = { git = "https://github.com/SeismicSystems/seismic-alloy.git", rev = "c8fad0b93da53f2b423d2f6720abdb4a6cbb9082" }
+alloy-consensus = "=1.1.0"
 alloy-contract = "=1.1.0"
 alloy-chains = "=0.2.17"
 alloy-eips = "=1.1.0"
