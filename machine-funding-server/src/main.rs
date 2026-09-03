@@ -1,7 +1,7 @@
 use faucet_machine_funding::store::FundingStore;
 use faucet_machine_funding::{
-    router_with_erc20, ChainDriver, Config, Erc20FundingService, Erc20UsdcActivation,
-    EvmChainDriver, FundingService, RedisStore,
+    router_with_networks, BaseActivation, BaseChainDriver, BaseFundingService, ChainDriver, Config,
+    Erc20FundingService, Erc20UsdcActivation, EvmChainDriver, FundingService, RedisStore,
 };
 use std::{env, io};
 use tokio::{net::TcpListener, signal};
@@ -18,17 +18,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env::args().any(|argument| argument == "--check-erc20-usdc") {
         return check_erc20_usdc(&config, &store).await;
     }
+    if env::args().any(|argument| argument == "--check-base") {
+        return check_base(&config, &store).await;
+    }
     let driver = EvmChainDriver::connect(&config).await?;
     let bind_addr = config.bind_addr;
     let legacy = FundingService::new(store.clone(), driver, config.clone());
     legacy.health().await?;
-    let erc20_usdc = erc20_service(&config, store).await;
+    let erc20_usdc = erc20_service(&config, store.clone()).await;
+    let base = base_service(&config, store).await;
     let listener = TcpListener::bind(bind_addr).await?;
     tracing::info!(%bind_addr, "machine funding service listening");
-    axum::serve(listener, router_with_erc20(legacy, erc20_usdc))
+    axum::serve(listener, router_with_networks(legacy, erc20_usdc, base))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Startup preflight for Base: chain id, signer/address match, native ETH
+/// reserve, token code, six decimals, and the ERC20 reserve.
+async fn check_base(config: &Config, store: &RedisStore) -> Result<(), Box<dyn std::error::Error>> {
+    let base = config.base.enabled().ok_or_else(|| {
+        io::Error::other("valid enabled Base configuration is required for preflight")
+    })?;
+    store.ping().await?;
+    let driver = BaseChainDriver::connect(base, config.receipt_timeout).await?;
+    let reserves = driver.reserves().await?;
+    tracing::info!(
+        native_balance = %reserves.native_balance,
+        erc20_usdc_balance = %reserves.erc20_usdc_balance,
+        "Base funding preflight passed"
+    );
+    Ok(())
+}
+
+async fn base_service(
+    config: &Config,
+    store: RedisStore,
+) -> BaseFundingService<RedisStore, BaseChainDriver> {
+    match &config.base {
+        BaseActivation::Disabled => BaseFundingService::Disabled,
+        BaseActivation::Invalid(error) => {
+            tracing::error!(%error, "Base funding configuration is invalid");
+            BaseFundingService::Unavailable
+        }
+        BaseActivation::Enabled(base) => {
+            match BaseChainDriver::connect(base, config.receipt_timeout).await {
+                Ok(driver) => BaseFundingService::Enabled(Box::new(FundingService::new(
+                    store,
+                    driver,
+                    config.clone(),
+                ))),
+                Err(error) => {
+                    tracing::error!(%error, "Base funding preflight failed");
+                    BaseFundingService::Unavailable
+                }
+            }
+        }
+    }
 }
 
 async fn check_erc20_usdc(

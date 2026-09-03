@@ -1,4 +1,4 @@
-use crate::model::Erc20DeploymentIdentity;
+use crate::model::{BaseNetworkIdentity, Erc20DeploymentIdentity};
 use alloy_primitives::{Address, U256};
 use std::{env, net::SocketAddr, str::FromStr, time::Duration};
 use thiserror::Error;
@@ -14,6 +14,7 @@ pub const MAX_REQUEST_TIMEOUT_MS: u64 = 45_000;
 const MINIMUM_TOKEN_LENGTH: usize = 32;
 const MINIMUM_GAS_SUSDC_AMOUNT: u64 = 100_000;
 const MAX_REDIS_INTEGER: u64 = i64::MAX as u64;
+const DEFAULT_BASE_CONFIRMATIONS: u64 = 1;
 
 #[derive(Clone)]
 pub struct Config {
@@ -30,6 +31,7 @@ pub struct Config {
     pub global_susdc_budget: U256,
     pub global_gas_susdc_budget: U256,
     pub erc20_usdc: Erc20UsdcActivation,
+    pub base: BaseActivation,
     pub rate_limit: u64,
     pub rate_window: Duration,
     pub confirmations: u64,
@@ -63,6 +65,52 @@ impl Erc20UsdcConfig {
     }
 }
 
+/// Base Sepolia funding: a dedicated reserve key holds native ETH for gas
+/// drips and standard ERC20 USDC for payouts, and sends both directly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaseConfig {
+    pub rpc_url: String,
+    pub chain_id: u64,
+    pub private_key: String,
+    pub reserve_address: Address,
+    pub token_address: Address,
+    pub gas_eth_amount: U256,
+    pub max_erc20_usdc_amount: U256,
+    pub global_gas_eth_budget: U256,
+    pub global_erc20_usdc_budget: U256,
+    pub eth_reserve_floor: U256,
+    pub erc20_usdc_reserve_floor: U256,
+    pub rate_limit: u64,
+    pub rate_window: Duration,
+    pub confirmations: u64,
+}
+
+impl BaseConfig {
+    pub fn identity(&self) -> BaseNetworkIdentity {
+        BaseNetworkIdentity {
+            chain_id: self.chain_id,
+            token_address: self.token_address.to_checksum(None),
+            reserve_address: self.reserve_address.to_checksum(None),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BaseActivation {
+    Disabled,
+    Invalid(String),
+    Enabled(Box<BaseConfig>),
+}
+
+impl BaseActivation {
+    pub fn enabled(&self) -> Option<&BaseConfig> {
+        match self {
+            Self::Enabled(config) => Some(config),
+            Self::Disabled | Self::Invalid(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Erc20UsdcActivation {
     Disabled,
@@ -91,6 +139,8 @@ pub enum ConfigError {
     BelowMinimum(&'static str, u64),
     #[error("single-transfer amount exceeds its global budget")]
     BudgetBelowTransfer,
+    #[error("{0} reuses a Seismic funding key; set INTERNAL_FUNDING_BASE_ALLOW_SHARED_KEY=true only with explicit approval")]
+    SharedFundingKey(&'static str),
 }
 
 impl Config {
@@ -165,6 +215,18 @@ impl Config {
                 Ok(None) => Erc20UsdcActivation::Disabled,
                 Err(error) => Erc20UsdcActivation::Invalid(error.to_string()),
             };
+        let seismic_keys = [
+            private_key.as_str(),
+            erc20_usdc
+                .enabled()
+                .map(|config| config.private_key.as_str())
+                .unwrap_or_default(),
+        ];
+        let base = match parse_base_config(&lookup, &seismic_keys) {
+            Ok(Some(config)) => BaseActivation::Enabled(Box::new(config)),
+            Ok(None) => BaseActivation::Disabled,
+            Err(error) => BaseActivation::Invalid(error.to_string()),
+        };
 
         Ok(Self {
             bind_addr,
@@ -180,6 +242,7 @@ impl Config {
             global_susdc_budget,
             global_gas_susdc_budget,
             erc20_usdc,
+            base,
             rate_limit: parse_u64(
                 lookup("INTERNAL_FUNDING_RATE_LIMIT"),
                 DEFAULT_RATE_LIMIT,
@@ -285,6 +348,114 @@ fn parse_erc20_usdc_config(
     }))
 }
 
+/// Every Base variable is inert until `INTERNAL_FUNDING_BASE_ENABLED=true`;
+/// an invalid block then leaves Base unavailable without touching the
+/// Seismic services, mirroring the ERC20 USDC activation.
+fn parse_base_config(
+    lookup: &impl Fn(&str) -> Option<String>,
+    seismic_private_keys: &[&str],
+) -> Result<Option<BaseConfig>, ConfigError> {
+    let enabled = match lookup("INTERNAL_FUNDING_BASE_ENABLED").as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(_) => return Err(ConfigError::Invalid("INTERNAL_FUNDING_BASE_ENABLED")),
+    };
+    if !enabled {
+        return Ok(None);
+    }
+    let required = |name: &'static str| lookup(name).ok_or(ConfigError::Missing(name));
+    let rpc_url = required("BASE_RPC_URL")?;
+    if url::Url::parse(&rpc_url).is_err() {
+        return Err(ConfigError::Invalid("BASE_RPC_URL"));
+    }
+    let chain_id: u64 = required("BASE_CHAIN_ID")?
+        .parse()
+        .map_err(|_| ConfigError::Invalid("BASE_CHAIN_ID"))?;
+    if chain_id == 0 {
+        return Err(ConfigError::Invalid("BASE_CHAIN_ID"));
+    }
+    let private_key = required("INTERNAL_FUNDING_BASE_PRIVATE_KEY")?;
+    validate_private_key(&private_key, "INTERNAL_FUNDING_BASE_PRIVATE_KEY")?;
+    let shared_key_allowed =
+        lookup("INTERNAL_FUNDING_BASE_ALLOW_SHARED_KEY").as_deref() == Some("true");
+    if !shared_key_allowed
+        && seismic_private_keys
+            .iter()
+            .any(|key| !key.is_empty() && key.eq_ignore_ascii_case(&private_key))
+    {
+        return Err(ConfigError::SharedFundingKey(
+            "INTERNAL_FUNDING_BASE_PRIVATE_KEY",
+        ));
+    }
+    let reserve_address = Address::from_str(&required("INTERNAL_FUNDING_BASE_ADDRESS")?)
+        .map_err(|_| ConfigError::Invalid("INTERNAL_FUNDING_BASE_ADDRESS"))?;
+    let token_address = Address::from_str(&required("BASE_ERC20_USDC_TOKEN_ADDRESS")?)
+        .map_err(|_| ConfigError::Invalid("BASE_ERC20_USDC_TOKEN_ADDRESS"))?;
+    if reserve_address == Address::ZERO || token_address == Address::ZERO {
+        return Err(ConfigError::Invalid("INTERNAL_FUNDING_BASE_ADDRESS"));
+    }
+    if token_address == reserve_address {
+        return Err(ConfigError::Invalid("BASE_ERC20_USDC_TOKEN_ADDRESS"));
+    }
+    let gas_eth_amount = parse_u256(
+        required("INTERNAL_FUNDING_BASE_GAS_ETH_AMOUNT")?,
+        "INTERNAL_FUNDING_BASE_GAS_ETH_AMOUNT",
+    )?;
+    let max_erc20_usdc_amount = parse_u256(
+        required("INTERNAL_FUNDING_MAX_BASE_ERC20_USDC_AMOUNT")?,
+        "INTERNAL_FUNDING_MAX_BASE_ERC20_USDC_AMOUNT",
+    )?;
+    let global_gas_eth_budget = parse_u256(
+        required("INTERNAL_FUNDING_GLOBAL_BASE_GAS_ETH_BUDGET")?,
+        "INTERNAL_FUNDING_GLOBAL_BASE_GAS_ETH_BUDGET",
+    )?;
+    let global_erc20_usdc_budget = parse_u256(
+        required("INTERNAL_FUNDING_GLOBAL_BASE_ERC20_USDC_BUDGET")?,
+        "INTERNAL_FUNDING_GLOBAL_BASE_ERC20_USDC_BUDGET",
+    )?;
+    if gas_eth_amount > global_gas_eth_budget || max_erc20_usdc_amount > global_erc20_usdc_budget {
+        return Err(ConfigError::BudgetBelowTransfer);
+    }
+    let eth_reserve_floor = parse_u256(
+        lookup("INTERNAL_FUNDING_BASE_ETH_RESERVE_FLOOR")
+            .unwrap_or_else(|| gas_eth_amount.to_string()),
+        "INTERNAL_FUNDING_BASE_ETH_RESERVE_FLOOR",
+    )?;
+    let erc20_usdc_reserve_floor = parse_u256(
+        lookup("INTERNAL_FUNDING_BASE_ERC20_USDC_RESERVE_FLOOR")
+            .unwrap_or_else(|| max_erc20_usdc_amount.to_string()),
+        "INTERNAL_FUNDING_BASE_ERC20_USDC_RESERVE_FLOOR",
+    )?;
+    Ok(Some(BaseConfig {
+        rpc_url,
+        chain_id,
+        private_key,
+        reserve_address,
+        token_address,
+        gas_eth_amount,
+        max_erc20_usdc_amount,
+        global_gas_eth_budget,
+        global_erc20_usdc_budget,
+        eth_reserve_floor,
+        erc20_usdc_reserve_floor,
+        rate_limit: parse_u64(
+            lookup("INTERNAL_FUNDING_BASE_RATE_LIMIT"),
+            DEFAULT_RATE_LIMIT,
+            "INTERNAL_FUNDING_BASE_RATE_LIMIT",
+        )?,
+        rate_window: Duration::from_secs(parse_u64(
+            lookup("INTERNAL_FUNDING_BASE_RATE_WINDOW_SECONDS"),
+            DEFAULT_RATE_WINDOW_SECONDS,
+            "INTERNAL_FUNDING_BASE_RATE_WINDOW_SECONDS",
+        )?),
+        confirmations: parse_u64(
+            lookup("INTERNAL_FUNDING_BASE_CONFIRMATIONS"),
+            DEFAULT_BASE_CONFIRMATIONS,
+            "INTERNAL_FUNDING_BASE_CONFIRMATIONS",
+        )?,
+    }))
+}
+
 fn validate_private_key(value: &str, name: &'static str) -> Result<(), ConfigError> {
     if value.len() != 66 || !value.starts_with("0x") || hex::decode(&value[2..]).is_err() {
         return Err(ConfigError::Invalid(name));
@@ -378,6 +549,40 @@ mod tests {
         );
     }
 
+    fn enable_base(values: &mut HashMap<&'static str, String>) {
+        values.insert("INTERNAL_FUNDING_BASE_ENABLED", "true".into());
+        values.insert("BASE_RPC_URL", "https://sepolia.base.org".into());
+        values.insert("BASE_CHAIN_ID", "84532".into());
+        values.insert(
+            "INTERNAL_FUNDING_BASE_PRIVATE_KEY",
+            format!("0x{}", "3".repeat(64)),
+        );
+        values.insert(
+            "INTERNAL_FUNDING_BASE_ADDRESS",
+            "0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c".into(),
+        );
+        values.insert(
+            "BASE_ERC20_USDC_TOKEN_ADDRESS",
+            "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into(),
+        );
+        values.insert(
+            "INTERNAL_FUNDING_BASE_GAS_ETH_AMOUNT",
+            "1000000000000000".into(),
+        );
+        values.insert(
+            "INTERNAL_FUNDING_MAX_BASE_ERC20_USDC_AMOUNT",
+            "250000000".into(),
+        );
+        values.insert(
+            "INTERNAL_FUNDING_GLOBAL_BASE_GAS_ETH_BUDGET",
+            "100000000000000000".into(),
+        );
+        values.insert(
+            "INTERNAL_FUNDING_GLOBAL_BASE_ERC20_USDC_BUDGET",
+            "1000000000".into(),
+        );
+    }
+
     #[test]
     fn loads_defaults_and_required_limits() {
         let values = valid_env();
@@ -387,6 +592,101 @@ mod tests {
         assert_eq!(config.receipt_timeout, Duration::from_secs(20));
         assert_eq!(config.request_timeout, Duration::from_secs(45));
         assert_eq!(config.erc20_usdc, Erc20UsdcActivation::Disabled);
+        assert_eq!(config.base, BaseActivation::Disabled);
+    }
+
+    #[test]
+    fn loads_base_only_when_explicitly_enabled_with_its_own_scope() {
+        let mut values = valid_env();
+        values.insert("BASE_RPC_URL", "not a url".into());
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert_eq!(config.base, BaseActivation::Disabled);
+
+        enable_base(&mut values);
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        let base = config.base.enabled().unwrap();
+        assert_eq!(base.chain_id, 84532);
+        assert_eq!(base.gas_eth_amount, U256::from(1_000_000_000_000_000u64));
+        assert_eq!(base.eth_reserve_floor, base.gas_eth_amount);
+        assert_eq!(base.erc20_usdc_reserve_floor, base.max_erc20_usdc_amount);
+        assert_eq!(base.confirmations, DEFAULT_BASE_CONFIRMATIONS);
+        assert_eq!(base.rate_limit, DEFAULT_RATE_LIMIT);
+        assert_eq!(
+            base.identity().scope(),
+            concat!(
+                "base:84532:",
+                "0x036cbd53842c5426634e7929541ec2318f3dcf7e:",
+                "0x5a0b54d5dc17e0aadc383d2db43b0a0d3e029c4c"
+            )
+        );
+        assert_eq!(config.erc20_usdc, Erc20UsdcActivation::Disabled);
+    }
+
+    #[test]
+    fn base_reserve_floors_and_budgets_are_validated() {
+        let mut values = valid_env();
+        enable_base(&mut values);
+        values.insert(
+            "INTERNAL_FUNDING_BASE_ETH_RESERVE_FLOOR",
+            "5000000000000000".into(),
+        );
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert_eq!(
+            config.base.enabled().unwrap().eth_reserve_floor,
+            U256::from(5_000_000_000_000_000u64)
+        );
+
+        values.insert(
+            "INTERNAL_FUNDING_GLOBAL_BASE_GAS_ETH_BUDGET",
+            "999999999999999".into(),
+        );
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert_eq!(
+            config.base,
+            BaseActivation::Invalid(ConfigError::BudgetBelowTransfer.to_string())
+        );
+    }
+
+    #[test]
+    fn invalid_base_config_does_not_prevent_legacy_startup() {
+        let mut values = valid_env();
+        values.insert("INTERNAL_FUNDING_BASE_ENABLED", "true".into());
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert!(matches!(config.base, BaseActivation::Invalid(_)));
+
+        enable_base(&mut values);
+        values.insert("BASE_CHAIN_ID", "0".into());
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert!(matches!(config.base, BaseActivation::Invalid(_)));
+
+        enable_base(&mut values);
+        values.insert(
+            "BASE_ERC20_USDC_TOKEN_ADDRESS",
+            "0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c".into(),
+        );
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert!(matches!(config.base, BaseActivation::Invalid(_)));
+    }
+
+    #[test]
+    fn base_refuses_a_reused_seismic_key_unless_explicitly_approved() {
+        let mut values = valid_env();
+        enable_base(&mut values);
+        values.insert(
+            "INTERNAL_FUNDING_BASE_PRIVATE_KEY",
+            format!("0x{}", "1".repeat(64)),
+        );
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert_eq!(
+            config.base,
+            BaseActivation::Invalid(
+                ConfigError::SharedFundingKey("INTERNAL_FUNDING_BASE_PRIVATE_KEY").to_string()
+            )
+        );
+
+        values.insert("INTERNAL_FUNDING_BASE_ALLOW_SHARED_KEY", "true".into());
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert!(config.base.enabled().is_some());
     }
 
     #[test]

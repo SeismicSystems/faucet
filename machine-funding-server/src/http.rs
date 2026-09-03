@@ -2,9 +2,9 @@ use crate::{
     chain::ChainDriver,
     model::{
         ErrorBody, ErrorEnvelope, FundingAsset, FundingInput, FundingResponse, GasRequest,
-        ServiceError, SusdcRequest,
+        ReserveDiagnostic, ServiceError, SusdcRequest,
     },
-    service::FundingService,
+    service::{base_unavailable, FundingService},
     store::FundingStore,
 };
 use alloy_primitives::{Address, U256};
@@ -33,9 +33,18 @@ pub enum Erc20FundingService<S, D> {
     Enabled(Box<FundingService<S, D>>),
 }
 
-struct RouterState<S, D> {
+/// Base Sepolia funding behind its own driver type: the Seismic services
+/// and this one never share a signer, queue, or ledger scope.
+pub enum BaseFundingService<S, B> {
+    Disabled,
+    Unavailable,
+    Enabled(Box<FundingService<S, B>>),
+}
+
+struct RouterState<S, D, B> {
     legacy: FundingService<S, D>,
     erc20_usdc: Erc20FundingService<S, D>,
+    base: BaseFundingService<S, B>,
 }
 
 pub fn router<S, D>(legacy: FundingService<S, D>) -> Router
@@ -54,30 +63,57 @@ where
     S: FundingStore,
     D: ChainDriver,
 {
+    router_with_networks::<S, D, D>(legacy, erc20_usdc, BaseFundingService::Disabled)
+}
+
+pub fn router_with_networks<S, D, B>(
+    legacy: FundingService<S, D>,
+    erc20_usdc: Erc20FundingService<S, D>,
+    base: BaseFundingService<S, B>,
+) -> Router
+where
+    S: FundingStore,
+    D: ChainDriver,
+    B: ChainDriver,
+{
     Router::new()
         .route("/api/internal/health", get(liveness))
-        .route("/api/internal/readiness", get(readiness::<S, D>))
-        .route("/api/internal/transfers", post(transfer::<S, D>))
-        .route("/api/internal/gas", post(gas::<S, D>))
+        .route("/api/internal/readiness", get(readiness::<S, D, B>))
+        .route("/api/internal/transfers", post(transfer::<S, D, B>))
+        .route("/api/internal/gas", post(gas::<S, D, B>))
         .route(
             "/api/internal/erc20-usdc/transfers",
-            post(erc20_usdc_transfer::<S, D>),
+            post(erc20_usdc_transfer::<S, D, B>),
         )
         .route(
             "/api/internal/erc20-usdc/readiness",
-            get(erc20_usdc_readiness::<S, D>),
+            get(erc20_usdc_readiness::<S, D, B>),
         )
-        .with_state(Arc::new(RouterState { legacy, erc20_usdc }))
+        .route("/api/internal/base/gas", post(base_gas::<S, D, B>))
+        .route(
+            "/api/internal/base/erc20-usdc/transfers",
+            post(base_erc20_usdc_transfer::<S, D, B>),
+        )
+        .route(
+            "/api/internal/base/readiness",
+            get(base_readiness::<S, D, B>),
+        )
+        .with_state(Arc::new(RouterState {
+            legacy,
+            erc20_usdc,
+            base,
+        }))
 }
 
-async fn transfer<S, D>(
-    State(state): State<Arc<RouterState<S, D>>>,
+async fn transfer<S, D, B>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
     headers: HeaderMap,
     payload: Result<Json<SusdcRequest>, JsonRejection>,
 ) -> Result<Json<FundingResponse>, ServiceError>
 where
     S: FundingStore,
     D: ChainDriver,
+    B: ChainDriver,
 {
     let service = &state.legacy;
     authorize(&headers, &service.config().token)?;
@@ -94,14 +130,15 @@ where
         .map(Json)
 }
 
-async fn gas<S, D>(
-    State(state): State<Arc<RouterState<S, D>>>,
+async fn gas<S, D, B>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
     headers: HeaderMap,
     payload: Result<Json<GasRequest>, JsonRejection>,
 ) -> Result<Json<FundingResponse>, ServiceError>
 where
     S: FundingStore,
     D: ChainDriver,
+    B: ChainDriver,
 {
     let service = &state.legacy;
     authorize(&headers, &service.config().token)?;
@@ -117,14 +154,15 @@ where
         .map(Json)
 }
 
-async fn erc20_usdc_transfer<S, D>(
-    State(state): State<Arc<RouterState<S, D>>>,
+async fn erc20_usdc_transfer<S, D, B>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
     headers: HeaderMap,
     payload: Result<Json<SusdcRequest>, JsonRejection>,
 ) -> Result<Json<FundingResponse>, ServiceError>
 where
     S: FundingStore,
     D: ChainDriver,
+    B: ChainDriver,
 {
     authorize(&headers, &state.legacy.config().token)?;
     let service = erc20_service(&state)?;
@@ -152,17 +190,135 @@ where
         .map(Json)
 }
 
+/// Native ETH gas drip on Base. The amount is fixed by configuration; the
+/// request names only the recipient, like the sUSDC gas route.
+async fn base_gas<S, D, B>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
+    headers: HeaderMap,
+    payload: Result<Json<GasRequest>, JsonRejection>,
+) -> Result<Json<FundingResponse>, ServiceError>
+where
+    S: FundingStore,
+    D: ChainDriver,
+    B: ChainDriver,
+{
+    authorize(&headers, &state.legacy.config().token)?;
+    let service = base_service(&state)?;
+    let base = service
+        .config()
+        .base
+        .enabled()
+        .ok_or_else(base_unavailable)?;
+    let Json(request) = payload.map_err(invalid_json)?;
+    let common = validate_common(request.idempotency_key, request.recipient, request.reason)?;
+    service
+        .execute(FundingInput {
+            asset: FundingAsset::BaseEth,
+            network_identity: Some(base.identity()),
+            amount: base.gas_eth_amount,
+            ..common
+        })
+        .await
+        .map(Json)
+}
+
+async fn base_erc20_usdc_transfer<S, D, B>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
+    headers: HeaderMap,
+    payload: Result<Json<SusdcRequest>, JsonRejection>,
+) -> Result<Json<FundingResponse>, ServiceError>
+where
+    S: FundingStore,
+    D: ChainDriver,
+    B: ChainDriver,
+{
+    authorize(&headers, &state.legacy.config().token)?;
+    let service = base_service(&state)?;
+    let base = service
+        .config()
+        .base
+        .enabled()
+        .ok_or_else(base_unavailable)?;
+    let Json(request) = payload.map_err(invalid_json)?;
+    let common = validate_common(request.idempotency_key, request.recipient, request.reason)?;
+    let amount = parse_amount(&request.amount, base.max_erc20_usdc_amount)?;
+    service
+        .execute(FundingInput {
+            asset: FundingAsset::BaseErc20Usdc,
+            network_identity: Some(base.identity()),
+            amount,
+            ..common
+        })
+        .await
+        .map(Json)
+}
+
+/// Readiness plus the reserve diagnostic: `200` while both reserves are at
+/// or above their floors, `503 reserve_low` once either drops below, so an
+/// operator alert fires before a drip actually fails on-chain.
+async fn base_readiness<S, D, B>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
+    headers: HeaderMap,
+) -> Result<Json<BaseHealth>, ServiceError>
+where
+    S: FundingStore,
+    D: ChainDriver,
+    B: ChainDriver,
+{
+    authorize(&headers, &state.legacy.config().token)?;
+    let service = base_service(&state)?;
+    let reserves = service.reserve_diagnostic().await?;
+    if reserves.as_ref().is_some_and(ReserveDiagnostic::is_low) {
+        return Err(ServiceError::new(
+            503,
+            "reserve_low",
+            "Base reserve is below its configured floor",
+        ));
+    }
+    Ok(Json(BaseHealth {
+        status: "ok",
+        reserves,
+    }))
+}
+
+fn base_service<S, D, B>(
+    state: &RouterState<S, D, B>,
+) -> Result<&FundingService<S, B>, ServiceError>
+where
+    S: FundingStore,
+    D: ChainDriver,
+    B: ChainDriver,
+{
+    match &state.base {
+        BaseFundingService::Enabled(service) => Ok(service),
+        BaseFundingService::Disabled => Err(ServiceError::new(
+            404,
+            "base_disabled",
+            "Base funding is not enabled",
+        )),
+        BaseFundingService::Unavailable => Err(base_unavailable()),
+    }
+}
+
+#[derive(Serialize)]
+struct BaseHealth {
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reserves: Option<ReserveDiagnostic>,
+}
+
 async fn liveness() -> Json<Health> {
     Json(Health { status: "ok" })
 }
 
-async fn readiness<S, D>(
-    State(state): State<Arc<RouterState<S, D>>>,
+async fn readiness<S, D, B>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
     headers: HeaderMap,
 ) -> Result<Json<Health>, ServiceError>
 where
     S: FundingStore,
     D: ChainDriver,
+    B: ChainDriver,
 {
     let service = &state.legacy;
     authorize(&headers, &service.config().token)?;
@@ -170,23 +326,27 @@ where
     Ok(Json(Health { status: "ok" }))
 }
 
-async fn erc20_usdc_readiness<S, D>(
-    State(state): State<Arc<RouterState<S, D>>>,
+async fn erc20_usdc_readiness<S, D, B>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
     headers: HeaderMap,
 ) -> Result<Json<Health>, ServiceError>
 where
     S: FundingStore,
     D: ChainDriver,
+    B: ChainDriver,
 {
     authorize(&headers, &state.legacy.config().token)?;
     erc20_service(&state)?.health().await?;
     Ok(Json(Health { status: "ok" }))
 }
 
-fn erc20_service<S, D>(state: &RouterState<S, D>) -> Result<&FundingService<S, D>, ServiceError>
+fn erc20_service<S, D, B>(
+    state: &RouterState<S, D, B>,
+) -> Result<&FundingService<S, D>, ServiceError>
 where
     S: FundingStore,
     D: ChainDriver,
+    B: ChainDriver,
 {
     match &state.erc20_usdc {
         Erc20FundingService::Enabled(service) => Ok(service),
@@ -271,6 +431,7 @@ fn validate_common(
     Ok(FundingInput {
         asset: FundingAsset::Susdc,
         deployment_identity: None,
+        network_identity: None,
         idempotency_key,
         recipient,
         recipient_text: recipient.to_checksum(None),

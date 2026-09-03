@@ -8,6 +8,8 @@ pub enum FundingAsset {
     Susdc,
     SusdcGas,
     Erc20Usdc,
+    BaseEth,
+    BaseErc20Usdc,
 }
 
 impl FundingAsset {
@@ -16,7 +18,13 @@ impl FundingAsset {
             Self::Susdc => "susdc",
             Self::SusdcGas => "susdc_gas",
             Self::Erc20Usdc => "erc20_usdc",
+            Self::BaseEth => "base_eth",
+            Self::BaseErc20Usdc => "base_erc20_usdc",
         }
+    }
+
+    pub fn is_base(self) -> bool {
+        matches!(self, Self::BaseEth | Self::BaseErc20Usdc)
     }
 }
 
@@ -24,11 +32,33 @@ impl FundingAsset {
 pub struct FundingInput {
     pub asset: FundingAsset,
     pub deployment_identity: Option<Erc20DeploymentIdentity>,
+    pub network_identity: Option<BaseNetworkIdentity>,
     pub idempotency_key: String,
     pub recipient: Address,
     pub recipient_text: String,
     pub amount: U256,
     pub reason: String,
+}
+
+/// The Base deployment a request is bound to. Every idempotency record,
+/// budget, and rate key on Base carries this scope, so a token redeploy or a
+/// reserve-key rotation starts a fresh ledger instead of replaying the old one.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct BaseNetworkIdentity {
+    pub chain_id: u64,
+    pub token_address: String,
+    pub reserve_address: String,
+}
+
+impl BaseNetworkIdentity {
+    pub fn scope(&self) -> String {
+        format!(
+            "base:{}:{}:{}",
+            self.chain_id,
+            self.token_address.to_ascii_lowercase(),
+            self.reserve_address.to_ascii_lowercase()
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -58,6 +88,8 @@ pub struct PersistedInput {
     pub asset: FundingAsset,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment_identity: Option<Erc20DeploymentIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_identity: Option<BaseNetworkIdentity>,
     pub idempotency_key: String,
     pub recipient: String,
     pub amount: String,
@@ -69,6 +101,7 @@ impl From<&FundingInput> for PersistedInput {
         Self {
             asset: input.asset,
             deployment_identity: input.deployment_identity.clone(),
+            network_identity: input.network_identity.clone(),
             idempotency_key: input.idempotency_key.clone(),
             recipient: input.recipient_text.clone(),
             amount: input.amount.to_string(),
@@ -90,6 +123,7 @@ impl TryFrom<&PersistedInput> for FundingInput {
         Ok(Self {
             asset: input.asset,
             deployment_identity: input.deployment_identity.clone(),
+            network_identity: input.network_identity.clone(),
             idempotency_key: input.idempotency_key.clone(),
             recipient,
             recipient_text: input.recipient.clone(),
@@ -226,6 +260,26 @@ impl ServiceError {
 
     pub fn internal() -> Self {
         Self::new(500, "internal_error", "Machine funding state is invalid")
+    }
+}
+
+/// Reserve health of a funding signer, for operators: balances alongside
+/// the configured floors and whether either has been breached.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ReserveDiagnostic {
+    pub chain_id: u64,
+    pub reserve_address: String,
+    pub native_balance: String,
+    pub native_floor: String,
+    pub native_low: bool,
+    pub erc20_usdc_balance: String,
+    pub erc20_usdc_floor: String,
+    pub erc20_usdc_low: bool,
+}
+
+impl ReserveDiagnostic {
+    pub fn is_low(&self) -> bool {
+        self.native_low || self.erc20_usdc_low
     }
 }
 

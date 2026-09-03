@@ -6,14 +6,14 @@ use axum::{
 };
 use faucet_machine_funding::{
     chain::ChainDriver,
-    config::{Erc20UsdcActivation, Erc20UsdcConfig},
+    config::{BaseActivation, BaseConfig, Erc20UsdcActivation, Erc20UsdcConfig},
     model::{
-        ChainResult, Erc20DeploymentIdentity, FundingAsset, FundingInput, FundingRecord,
-        PersistedInput, PreparedTransaction, ServiceError,
+        BaseNetworkIdentity, ChainResult, Erc20DeploymentIdentity, FundingAsset, FundingInput,
+        FundingRecord, PersistedInput, PreparedTransaction, ReserveDiagnostic, ServiceError,
     },
-    router, router_with_erc20,
+    router, router_with_erc20, router_with_networks,
     store::FundingStore,
-    Config, Erc20FundingService, FundingService, RedisStore,
+    BaseFundingService, Config, Erc20FundingService, FundingService, RedisStore,
 };
 use http_body_util::BodyExt;
 use redis::AsyncCommands;
@@ -107,6 +107,8 @@ struct FakeDriver {
     inner: Arc<Mutex<FakeState>>,
     operator_key: String,
     deployment_identity: Option<Erc20DeploymentIdentity>,
+    network_identity: Option<BaseNetworkIdentity>,
+    reserves: Option<ReserveDiagnostic>,
 }
 
 struct FakeState {
@@ -127,7 +129,19 @@ impl FakeDriver {
             })),
             operator_key: "5124:0xmachine".into(),
             deployment_identity: None,
+            network_identity: None,
+            reserves: None,
         }
+    }
+
+    fn with_network_identity(mut self, identity: BaseNetworkIdentity) -> Self {
+        self.network_identity = Some(identity);
+        self
+    }
+
+    fn with_reserves(mut self, reserves: ReserveDiagnostic) -> Self {
+        self.reserves = Some(reserves);
+        self
     }
 
     fn with_operator_key(mut self, operator_key: &str) -> Self {
@@ -158,6 +172,23 @@ impl ChainDriver for FakeDriver {
     }
 
     fn validate_input(&self, input: &FundingInput) -> Result<(), ServiceError> {
+        let mismatch = || {
+            ServiceError::new(
+                409,
+                "deployment_identity_mismatch",
+                "Funding request belongs to a different contract deployment",
+            )
+        };
+        if let Some(identity) = &self.network_identity {
+            return if input.asset.is_base() && input.network_identity.as_ref() == Some(identity) {
+                Ok(())
+            } else {
+                Err(mismatch())
+            };
+        }
+        if input.network_identity.is_some() || input.asset.is_base() {
+            return Err(mismatch());
+        }
         match (&self.deployment_identity, input.asset) {
             (Some(identity), FundingAsset::Erc20Usdc)
                 if input.deployment_identity.as_ref() == Some(identity) =>
@@ -169,11 +200,7 @@ impl ChainDriver for FakeDriver {
             {
                 Ok(())
             }
-            _ => Err(ServiceError::new(
-                409,
-                "deployment_identity_mismatch",
-                "Funding request belongs to a different contract deployment",
-            )),
+            _ => Err(mismatch()),
         }
     }
 
@@ -213,6 +240,10 @@ impl ChainDriver for FakeDriver {
     async fn health(&self) -> Result<(), ServiceError> {
         Ok(())
     }
+
+    async fn reserve_diagnostic(&self) -> Result<Option<ReserveDiagnostic>, ServiceError> {
+        Ok(self.reserves.clone())
+    }
 }
 
 fn config(redis_url: String) -> Config {
@@ -230,6 +261,7 @@ fn config(redis_url: String) -> Config {
         global_susdc_budget: U256::from(1_000_000_000u64),
         global_gas_susdc_budget: U256::from(10_000_000u64),
         erc20_usdc: Erc20UsdcActivation::Disabled,
+        base: BaseActivation::Disabled,
         rate_limit: 10,
         rate_window: Duration::from_secs(60),
         confirmations: 1,
@@ -243,6 +275,7 @@ fn request(key: &str, amount: u64) -> FundingInput {
     FundingInput {
         asset: FundingAsset::Susdc,
         deployment_identity: None,
+        network_identity: None,
         idempotency_key: key.into(),
         recipient: Address::from_str(RECIPIENT).unwrap(),
         recipient_text: RECIPIENT.into(),
@@ -278,6 +311,63 @@ fn erc20_request(config: &Config, key: &str, amount: u64) -> FundingInput {
     input.asset = FundingAsset::Erc20Usdc;
     input.deployment_identity = Some(erc20_identity(config));
     input
+}
+
+const BASE_TOKEN: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+const BASE_RESERVE: &str = "0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c";
+const BASE_GAS_WEI: u64 = 1_000_000_000_000_000;
+
+fn base_config() -> BaseConfig {
+    BaseConfig {
+        rpc_url: "http://127.0.0.1:8546".into(),
+        chain_id: 84532,
+        private_key: format!("0x{}", "3".repeat(64)),
+        reserve_address: Address::from_str(BASE_RESERVE).unwrap(),
+        token_address: Address::from_str(BASE_TOKEN).unwrap(),
+        gas_eth_amount: U256::from(BASE_GAS_WEI),
+        max_erc20_usdc_amount: U256::from(250_000_000u64),
+        global_gas_eth_budget: U256::from(100_000_000_000_000_000u64),
+        global_erc20_usdc_budget: U256::from(1_000_000_000u64),
+        eth_reserve_floor: U256::from(BASE_GAS_WEI),
+        erc20_usdc_reserve_floor: U256::from(250_000_000u64),
+        rate_limit: 10,
+        rate_window: Duration::from_secs(60),
+        confirmations: 1,
+    }
+}
+
+fn enable_base(config: &mut Config) {
+    config.base = BaseActivation::Enabled(Box::new(base_config()));
+}
+
+fn base_identity(config: &Config) -> BaseNetworkIdentity {
+    config.base.enabled().unwrap().identity()
+}
+
+fn base_request(config: &Config, asset: FundingAsset, key: &str, amount: u64) -> FundingInput {
+    let mut input = request(key, amount);
+    input.asset = asset;
+    input.network_identity = Some(base_identity(config));
+    input
+}
+
+fn base_driver(config: &Config, results: impl IntoIterator<Item = ChainResult>) -> FakeDriver {
+    FakeDriver::new(results)
+        .with_operator_key("84532:0xbasereserve")
+        .with_network_identity(base_identity(config))
+}
+
+fn healthy_reserves() -> ReserveDiagnostic {
+    ReserveDiagnostic {
+        chain_id: 84532,
+        reserve_address: BASE_RESERVE.into(),
+        native_balance: "50000000000000000".into(),
+        native_floor: BASE_GAS_WEI.to_string(),
+        native_low: false,
+        erc20_usdc_balance: "1000000000".into(),
+        erc20_usdc_floor: "250000000".into(),
+        erc20_usdc_low: false,
+    }
 }
 
 #[test]
@@ -768,4 +858,419 @@ async fn erc20_usdc_route_preserves_machine_funding_wire_shape() {
     assert_eq!(body["idempotency_key"], "erc20-order-123");
     assert_eq!(body["amount"], "12500000");
     assert_eq!(body["replayed"], false);
+}
+
+#[tokio::test]
+async fn base_records_are_scoped_to_asset_and_network_identity() {
+    let redis = TestRedis::start().await;
+    let legacy_driver = FakeDriver::new([ChainResult::Success]);
+    let legacy_service = FundingService::new(
+        redis.store().await,
+        legacy_driver.clone(),
+        config(redis.url.clone()),
+    );
+    let mut base_config = config(redis.url.clone());
+    enable_base(&mut base_config);
+    let identity = base_identity(&base_config);
+    let driver = base_driver(&base_config, [ChainResult::Success, ChainResult::Success]);
+    let base_service =
+        FundingService::new(redis.store().await, driver.clone(), base_config.clone());
+
+    legacy_service
+        .execute(request("shared-key", 12_500_000))
+        .await
+        .unwrap();
+    let gas = base_service
+        .execute(base_request(
+            &base_config,
+            FundingAsset::BaseEth,
+            "shared-key",
+            BASE_GAS_WEI,
+        ))
+        .await
+        .unwrap();
+    let usdc = base_service
+        .execute(base_request(
+            &base_config,
+            FundingAsset::BaseErc20Usdc,
+            "shared-key",
+            12_500_000,
+        ))
+        .await
+        .unwrap();
+    assert_ne!(gas.transaction_hash, usdc.transaction_hash);
+    assert!(!gas.replayed && !usdc.replayed);
+
+    let mut connection = redis.raw_connection().await;
+    for key in [
+        "machine-funding:idempotency:shared-key".to_owned(),
+        format!(
+            "machine-funding:base_eth:{}:idempotency:shared-key",
+            identity.scope()
+        ),
+        format!(
+            "machine-funding:base_erc20_usdc:{}:idempotency:shared-key",
+            identity.scope()
+        ),
+    ] {
+        let record: Option<String> = connection.get(&key).await.unwrap();
+        assert!(record.is_some(), "{key} should exist");
+    }
+    assert_eq!(legacy_driver.counts(), (1, 1));
+    assert_eq!(driver.counts(), (2, 2));
+}
+
+#[tokio::test]
+async fn base_gas_replays_identically_and_never_double_funds() {
+    let redis = TestRedis::start().await;
+    let mut base_config = config(redis.url.clone());
+    enable_base(&mut base_config);
+    let driver = base_driver(&base_config, [ChainResult::Success]);
+    let service = FundingService::new(redis.store().await, driver.clone(), base_config.clone());
+    let gas = base_request(
+        &base_config,
+        FundingAsset::BaseEth,
+        "wallet-1",
+        BASE_GAS_WEI,
+    );
+
+    let (first, second) = tokio::join!(service.execute(gas.clone()), service.execute(gas.clone()));
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.transaction_hash, second.transaction_hash);
+    assert_ne!(first.replayed, second.replayed);
+    let third = service.execute(gas).await.unwrap();
+    assert!(third.replayed);
+    assert_eq!(third.amount, BASE_GAS_WEI.to_string());
+    assert_eq!(driver.counts(), (1, 1));
+}
+
+#[tokio::test]
+async fn base_budgets_and_rate_limits_are_independent_from_seismic() {
+    let redis = TestRedis::start().await;
+    let mut base_config = config(redis.url.clone());
+    enable_base(&mut base_config);
+    let BaseActivation::Enabled(limits) = &mut base_config.base else {
+        unreachable!();
+    };
+    limits.global_erc20_usdc_budget = U256::from(20u64);
+    limits.global_gas_eth_budget = U256::from(BASE_GAS_WEI);
+    limits.rate_limit = 1;
+    let driver = base_driver(&base_config, [ChainResult::Success, ChainResult::Success]);
+    let service = FundingService::new(redis.store().await, driver.clone(), base_config.clone());
+
+    service
+        .execute(base_request(
+            &base_config,
+            FundingAsset::BaseErc20Usdc,
+            "usdc-1",
+            15,
+        ))
+        .await
+        .unwrap();
+    let rate_error = service
+        .execute(base_request(
+            &base_config,
+            FundingAsset::BaseErc20Usdc,
+            "usdc-2",
+            1,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(rate_error.code, "rate_limited");
+    let mut other = base_request(&base_config, FundingAsset::BaseErc20Usdc, "usdc-3", 10);
+    other.recipient = Address::with_last_byte(0xa2);
+    other.recipient_text = other.recipient.to_checksum(None);
+    assert_eq!(
+        service.execute(other).await.unwrap_err().code,
+        "global_budget_exceeded"
+    );
+
+    let mut gas = base_request(&base_config, FundingAsset::BaseEth, "gas-1", BASE_GAS_WEI);
+    gas.recipient = Address::with_last_byte(0xa3);
+    gas.recipient_text = gas.recipient.to_checksum(None);
+    service.execute(gas).await.unwrap();
+    let mut depleted = base_request(&base_config, FundingAsset::BaseEth, "gas-2", BASE_GAS_WEI);
+    depleted.recipient = Address::with_last_byte(0xa4);
+    depleted.recipient_text = depleted.recipient.to_checksum(None);
+    assert_eq!(
+        service.execute(depleted).await.unwrap_err().code,
+        "global_budget_exceeded"
+    );
+
+    let legacy_driver = FakeDriver::new([ChainResult::Success]);
+    let legacy_service = FundingService::new(
+        redis.store().await,
+        legacy_driver.clone(),
+        config(redis.url.clone()),
+    );
+    legacy_service
+        .execute(request("legacy-1", 10))
+        .await
+        .unwrap();
+    assert_eq!(legacy_driver.counts(), (1, 1));
+    assert_eq!(driver.counts(), (2, 2));
+}
+
+#[tokio::test]
+async fn base_depleted_reserve_is_terminal_and_never_rebroadcast() {
+    let redis = TestRedis::start().await;
+    let mut base_config = config(redis.url.clone());
+    enable_base(&mut base_config);
+    let driver = base_driver(
+        &base_config,
+        [
+            ChainResult::Rejected("insufficient funds for gas * price + value".into()),
+            ChainResult::Success,
+        ],
+    );
+    let service = FundingService::new(redis.store().await, driver.clone(), base_config.clone());
+    let gas = base_request(
+        &base_config,
+        FundingAsset::BaseEth,
+        "gas-depleted",
+        BASE_GAS_WEI,
+    );
+    let first = service.execute(gas.clone()).await.unwrap_err();
+    let replay = service.execute(gas).await.unwrap_err();
+    assert_eq!(first.status, 422);
+    assert_eq!(first.code, "transaction_rejected");
+    assert_eq!(replay.code, "transaction_rejected");
+    assert_eq!(driver.counts(), (1, 1));
+}
+
+#[tokio::test]
+async fn base_requests_are_refused_by_a_seismic_driver_and_vice_versa() {
+    let redis = TestRedis::start().await;
+    let mut base_config = config(redis.url.clone());
+    enable_base(&mut base_config);
+    let seismic = FundingService::new(
+        redis.store().await,
+        FakeDriver::new([ChainResult::Success]),
+        base_config.clone(),
+    );
+    let wrong_driver = seismic
+        .execute(base_request(
+            &base_config,
+            FundingAsset::BaseEth,
+            "cross-1",
+            BASE_GAS_WEI,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(wrong_driver.code, "deployment_identity_mismatch");
+
+    let base = FundingService::new(
+        redis.store().await,
+        base_driver(&base_config, [ChainResult::Success]),
+        base_config.clone(),
+    );
+    let wrong_asset = base.execute(request("cross-2", 10)).await.unwrap_err();
+    assert_eq!(wrong_asset.code, "deployment_identity_mismatch");
+
+    let mut rotated = base_request(&base_config, FundingAsset::BaseErc20Usdc, "cross-3", 10);
+    rotated.network_identity = Some(BaseNetworkIdentity {
+        token_address: Address::with_last_byte(0x11).to_checksum(None),
+        ..base_identity(&base_config)
+    });
+    assert_eq!(
+        base.execute(rotated).await.unwrap_err().code,
+        "deployment_identity_mismatch"
+    );
+}
+
+#[tokio::test]
+async fn base_routes_are_disabled_by_default_and_require_auth() {
+    let redis = TestRedis::start().await;
+    let legacy = FundingService::new(
+        redis.store().await,
+        FakeDriver::new([]),
+        config(redis.url.clone()),
+    );
+    let app = router_with_erc20(legacy, Erc20FundingService::Disabled);
+    let body = r#"{"idempotency_key":"base-1","recipient":"0x00000000000000000000000000000000000000A1","reason":"wallet_registration"}"#;
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::post("/api/internal/base/gas")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    for path in [
+        "/api/internal/base/gas",
+        "/api/internal/base/erc20-usdc/transfers",
+    ] {
+        let disabled = app
+            .clone()
+            .oneshot(
+                Request::post(path)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::AUTHORIZATION,
+                        "Bearer a-secure-machine-token-with-32-characters",
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(disabled.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    let readiness = app
+        .oneshot(
+            Request::get("/api/internal/base/readiness")
+                .header(
+                    header::AUTHORIZATION,
+                    "Bearer a-secure-machine-token-with-32-characters",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::NOT_FOUND);
+}
+
+async fn json_body(response: axum::response::Response) -> serde_json::Value {
+    serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+#[tokio::test]
+async fn base_routes_preserve_the_machine_funding_wire_and_report_reserves() {
+    let redis = TestRedis::start().await;
+    let legacy = FundingService::new(
+        redis.store().await,
+        FakeDriver::new([]),
+        config(redis.url.clone()),
+    );
+    let mut base_config = config(redis.url.clone());
+    enable_base(&mut base_config);
+    let driver = base_driver(&base_config, [ChainResult::Success, ChainResult::Success])
+        .with_reserves(healthy_reserves());
+    let base = FundingService::new(redis.store().await, driver, base_config);
+    let app = router_with_networks(
+        legacy,
+        Erc20FundingService::Disabled,
+        BaseFundingService::Enabled(Box::new(base)),
+    );
+    let auth = "Bearer a-secure-machine-token-with-32-characters";
+
+    let gas = app
+        .clone()
+        .oneshot(
+            Request::post("/api/internal/base/gas")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::from(
+                    r#"{"idempotency_key":"base-gas-1","recipient":"0x00000000000000000000000000000000000000A1","reason":"wallet_registration"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(gas.status(), StatusCode::OK);
+    let gas = json_body(gas).await;
+    assert_eq!(gas["idempotency_key"], "base-gas-1");
+    assert_eq!(gas["amount"], BASE_GAS_WEI.to_string());
+    assert_eq!(gas["replayed"], false);
+
+    let over_limit = app
+        .clone()
+        .oneshot(
+            Request::post("/api/internal/base/erc20-usdc/transfers")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::from(
+                    r#"{"idempotency_key":"base-usdc-big","recipient":"0x00000000000000000000000000000000000000A1","amount":"250000001","reason":"order_payout"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(over_limit.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(over_limit).await["error"]["code"],
+        "amount_exceeds_limit"
+    );
+
+    let usdc = app
+        .clone()
+        .oneshot(
+            Request::post("/api/internal/base/erc20-usdc/transfers")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::from(
+                    r#"{"idempotency_key":"base-usdc-1","recipient":"0x00000000000000000000000000000000000000A1","amount":"12500000","reason":"order_payout"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(usdc.status(), StatusCode::OK);
+    let usdc = json_body(usdc).await;
+    assert_eq!(usdc["amount"], "12500000");
+    assert_eq!(
+        usdc["recipient"],
+        "0x00000000000000000000000000000000000000A1"
+    );
+
+    let readiness = app
+        .oneshot(
+            Request::get("/api/internal/base/readiness")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    let readiness = json_body(readiness).await;
+    assert_eq!(readiness["status"], "ok");
+    assert_eq!(readiness["reserves"]["chain_id"], 84532);
+    assert_eq!(readiness["reserves"]["native_low"], false);
+}
+
+#[tokio::test]
+async fn base_readiness_reports_a_low_reserve_as_unavailable() {
+    let redis = TestRedis::start().await;
+    let legacy = FundingService::new(
+        redis.store().await,
+        FakeDriver::new([]),
+        config(redis.url.clone()),
+    );
+    let mut base_config = config(redis.url.clone());
+    enable_base(&mut base_config);
+    let mut low = healthy_reserves();
+    low.native_balance = "1".into();
+    low.native_low = true;
+    let base = FundingService::new(
+        redis.store().await,
+        base_driver(&base_config, []).with_reserves(low),
+        base_config,
+    );
+    let app = router_with_networks(
+        legacy,
+        Erc20FundingService::Disabled,
+        BaseFundingService::Enabled(Box::new(base)),
+    );
+    let readiness = app
+        .oneshot(
+            Request::get("/api/internal/base/readiness")
+                .header(
+                    header::AUTHORIZATION,
+                    "Bearer a-secure-machine-token-with-32-characters",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json_body(readiness).await["error"]["code"], "reserve_low");
 }

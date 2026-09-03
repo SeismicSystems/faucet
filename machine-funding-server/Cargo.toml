@@ -38,6 +38,7 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+alloy-consensus = { workspace = true, features = ["k256"] }
 http-body-util.workspace = true
 tempfile = "3.21.0"
 tower = { workspace = true, features = ["util"] }
