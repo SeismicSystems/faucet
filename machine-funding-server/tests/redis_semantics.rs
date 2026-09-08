@@ -1142,6 +1142,44 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn settlement_identity_is_authenticated_and_uses_the_actual_token_holder() {
+    let redis = TestRedis::start().await;
+    let legacy = FundingService::new(
+        redis.store().await,
+        FakeDriver::new([]),
+        config(redis.url.clone()),
+    );
+    let mut erc20_config = config(redis.url.clone());
+    enable_erc20_usdc(&mut erc20_config);
+    let expected = erc20_config.erc20_usdc.enabled().unwrap().faucet_address;
+    let erc20 = FundingService::new(redis.store().await, FakeDriver::new([]), erc20_config);
+    let app = router_with_erc20(legacy, Erc20FundingService::Enabled(Box::new(erc20)));
+    let path = "/api/internal/erc20-usdc/settlement";
+    let response = app
+        .clone()
+        .oneshot(Request::get(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = app
+        .oneshot(
+            Request::get(path)
+                .header(
+                    header::AUTHORIZATION,
+                    "Bearer a-secure-machine-token-with-32-characters",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["treasury_address"], expected.to_string());
+    assert_eq!(body.as_object().unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn base_routes_preserve_the_machine_funding_wire_and_report_reserves() {
     let redis = TestRedis::start().await;
     let legacy = FundingService::new(
@@ -1160,6 +1198,24 @@ async fn base_routes_preserve_the_machine_funding_wire_and_report_reserves() {
         BaseFundingService::Enabled(Box::new(base)),
     );
     let auth = "Bearer a-secure-machine-token-with-32-characters";
+
+    let identity = app
+        .clone()
+        .oneshot(
+            Request::get("/api/internal/base/settlement")
+                .header(header::AUTHORIZATION, auth)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(identity.status(), StatusCode::OK);
+    let identity = json_body(identity).await;
+    assert_eq!(identity["chain_id"], 84532);
+    assert_eq!(
+        identity["treasury_address"],
+        healthy_reserves().reserve_address.to_lowercase()
+    );
 
     let gas = app
         .clone()

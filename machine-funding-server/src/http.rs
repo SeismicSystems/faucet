@@ -91,6 +91,14 @@ where
         )
         .route("/api/internal/base/gas", post(base_gas::<S, D, B>))
         .route(
+            "/api/internal/base/settlement",
+            get(base_settlement::<S, D, B>),
+        )
+        .route(
+            "/api/internal/erc20-usdc/settlement",
+            get(erc20_settlement::<S, D, B>),
+        )
+        .route(
             "/api/internal/base/erc20-usdc/transfers",
             post(base_erc20_usdc_transfer::<S, D, B>),
         )
@@ -103,6 +111,49 @@ where
             erc20_usdc,
             base,
         }))
+}
+
+#[derive(Serialize)]
+struct SettlementIdentity {
+    chain_id: u64,
+    token_address: Address,
+    treasury_address: Address,
+}
+
+async fn base_settlement<S: FundingStore, D: ChainDriver, B: ChainDriver>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
+    headers: HeaderMap,
+) -> Result<Json<SettlementIdentity>, ServiceError> {
+    authorize(&headers, &state.legacy.config().token)?;
+    let service = base_service(&state)?;
+    let config = service
+        .config()
+        .base
+        .enabled()
+        .ok_or_else(base_unavailable)?;
+    Ok(Json(SettlementIdentity {
+        chain_id: config.chain_id,
+        token_address: config.token_address,
+        treasury_address: config.reserve_address,
+    }))
+}
+
+async fn erc20_settlement<S: FundingStore, D: ChainDriver, B: ChainDriver>(
+    State(state): State<Arc<RouterState<S, D, B>>>,
+    headers: HeaderMap,
+) -> Result<Json<SettlementIdentity>, ServiceError> {
+    authorize(&headers, &state.legacy.config().token)?;
+    let service = erc20_service(&state)?;
+    let config = service
+        .config()
+        .erc20_usdc
+        .enabled()
+        .ok_or_else(erc20_unavailable)?;
+    Ok(Json(SettlementIdentity {
+        chain_id: service.config().chain_id,
+        token_address: config.token_address,
+        treasury_address: config.faucet_address,
+    }))
 }
 
 async fn transfer<S, D, B>(
