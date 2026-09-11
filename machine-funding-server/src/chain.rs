@@ -66,6 +66,13 @@ pub trait ChainDriver: Clone + Send + Sync + 'static {
         Ok(())
     }
     async fn pending_nonce(&self) -> Result<u64, ServiceError>;
+    async fn can_retry_reverted(
+        &self,
+        _input: &FundingInput,
+        _transaction: &PreparedTransaction,
+    ) -> Result<bool, ServiceError> {
+        Ok(false)
+    }
     async fn prepare(
         &self,
         input: &FundingInput,

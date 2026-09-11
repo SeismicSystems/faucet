@@ -177,8 +177,10 @@ where
                 "idempotency_key was already used for a different request",
             ));
         }
-        if let Some(response) = terminal_result(&existing, true)? {
-            return Ok(response);
+        if !base_eth_revert(&existing) {
+            if let Some(response) = terminal_result(&existing, true)? {
+                return Ok(response);
+            }
         }
 
         let lock_guard = self
@@ -297,7 +299,24 @@ where
                 "idempotency_key was already used for a different request",
             ));
         }
-        if let Some(response) = terminal_result(&current, true)? {
+        let retry = if base_eth_revert(&current) {
+            let FundingRecord::Failed {
+                input, transaction, ..
+            } = &current
+            else {
+                unreachable!()
+            };
+            self.driver
+                .can_retry_reverted(&FundingInput::try_from(input)?, transaction)
+                .await?
+        } else {
+            false
+        };
+        if retry {
+            self.store
+                .retry_reverted(request_record_key, queue, &current)
+                .await?;
+        } else if let Some(response) = terminal_result(&current, true)? {
             return Ok(response);
         }
 
@@ -496,6 +515,11 @@ where
     fn base_config(&self) -> Result<&crate::config::BaseConfig, ServiceError> {
         self.config.base.enabled().ok_or_else(base_unavailable)
     }
+}
+
+fn base_eth_revert(record: &FundingRecord) -> bool {
+    matches!(record, FundingRecord::Failed { input, code, .. }
+        if input.asset == FundingAsset::BaseEth && code == "transaction_reverted")
 }
 
 fn terminal_result(

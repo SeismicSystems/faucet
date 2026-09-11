@@ -109,6 +109,7 @@ struct FakeDriver {
     deployment_identity: Option<Erc20DeploymentIdentity>,
     network_identity: Option<BaseNetworkIdentity>,
     reserves: Option<ReserveDiagnostic>,
+    retry_legacy: bool,
 }
 
 struct FakeState {
@@ -131,6 +132,7 @@ impl FakeDriver {
             deployment_identity: None,
             network_identity: None,
             reserves: None,
+            retry_legacy: false,
         }
     }
 
@@ -167,6 +169,14 @@ impl FakeDriver {
 
 #[async_trait]
 impl ChainDriver for FakeDriver {
+    async fn can_retry_reverted(
+        &self,
+        input: &FundingInput,
+        transaction: &PreparedTransaction,
+    ) -> Result<bool, ServiceError> {
+        self.validate_input(input)?;
+        Ok(self.retry_legacy && input.asset == FundingAsset::BaseEth && transaction.nonce == 0)
+    }
     fn operator_key(&self) -> &str {
         &self.operator_key
     }
@@ -942,6 +952,84 @@ async fn base_gas_replays_identically_and_never_double_funds() {
     let third = service.execute(gas).await.unwrap();
     assert!(third.replayed);
     assert_eq!(third.amount, BASE_GAS_WEI.to_string());
+    assert_eq!(driver.counts(), (1, 1));
+}
+
+#[tokio::test]
+async fn legacy_base_gas_retry_preserves_history_budget_and_concurrent_idempotency() {
+    let redis = TestRedis::start().await;
+    let mut config = config(redis.url.clone());
+    enable_base(&mut config);
+    let BaseActivation::Enabled(limits) = &mut config.base else {
+        unreachable!()
+    };
+    limits.rate_limit = 1;
+    limits.global_gas_eth_budget = U256::from(BASE_GAS_WEI);
+    let mut driver = base_driver(
+        &config,
+        [
+            ChainResult::Reverted,
+            ChainResult::Pending,
+            ChainResult::Success,
+        ],
+    );
+    driver.retry_legacy = true;
+    let gas = base_request(&config, FundingAsset::BaseEth, "legacy-retry", BASE_GAS_WEI);
+    let store = redis.store().await;
+    let service = FundingService::new(store.clone(), driver.clone(), config.clone());
+    assert_eq!(
+        service.execute(gas.clone()).await.unwrap_err().code,
+        "transaction_reverted"
+    );
+    let key = format!(
+        "machine-funding:base_eth:{}:idempotency:legacy-retry",
+        gas.network_identity.as_ref().unwrap().scope()
+    );
+    let failed = store.get_record(&key).await.unwrap().unwrap();
+    let FundingRecord::Failed { transaction, .. } = &failed else {
+        panic!("expected failed record")
+    };
+    assert_eq!(
+        service.execute(gas.clone()).await.unwrap_err().code,
+        "transaction_pending"
+    );
+    let archived = store
+        .get_record(&format!("{key}:reverted:{}", transaction.hash))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(archived, FundingRecord::Failed { .. }));
+    assert!(store
+        .retry_reverted(&key, "unused-queue", &failed)
+        .await
+        .is_err());
+    let restarted = FundingService::new(store, driver.clone(), config);
+    let (first, second) = tokio::join!(
+        restarted.execute(gas.clone()),
+        restarted.execute(gas.clone())
+    );
+    assert_eq!(
+        first.unwrap().transaction_hash,
+        second.unwrap().transaction_hash
+    );
+    assert!(restarted.execute(gas).await.unwrap().replayed);
+    assert_eq!(driver.counts(), (2, 3));
+}
+
+#[tokio::test]
+async fn nonrecoverable_base_reverts_remain_terminal() {
+    let redis = TestRedis::start().await;
+    let mut config = config(redis.url.clone());
+    enable_base(&mut config);
+    let driver = base_driver(&config, [ChainResult::Reverted]);
+    let service = FundingService::new(redis.store().await, driver.clone(), config.clone());
+    let gas = base_request(&config, FundingAsset::BaseEth, "no-retry", BASE_GAS_WEI);
+    for _ in 0..2 {
+        assert_eq!(
+            service.execute(gas.clone()).await.unwrap_err().code,
+            "transaction_reverted"
+        );
+    }
     assert_eq!(driver.counts(), (1, 1));
 }
 

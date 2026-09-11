@@ -8,6 +8,14 @@ use std::time::Duration;
 
 const REDIS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const REDIS_CONNECTION_TIMEOUT: Duration = Duration::from_secs(2);
+const RETRY_REVERTED_SCRIPT: &str = r#"
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[3], ARGV[1], 'NX')
+redis.call('SET', KEYS[1], ARGV[2])
+redis.call('LREM', KEYS[2], 0, KEYS[1])
+redis.call('RPUSH', KEYS[2], KEYS[1])
+return 1
+"#;
 
 const RESERVE_AND_ENQUEUE_SCRIPT: &str = r#"
 if redis.call('EXISTS', KEYS[1]) == 1 then return {0, 0} end
@@ -75,6 +83,12 @@ pub trait FundingStore: Clone + Send + Sync + 'static {
     ) -> Result<ReservationResult, ServiceError>;
     async fn get_record(&self, key: &str) -> Result<Option<FundingRecord>, ServiceError>;
     async fn set_record(&self, key: &str, record: &FundingRecord) -> Result<(), ServiceError>;
+    async fn retry_reverted(
+        &self,
+        key: &str,
+        queue: &str,
+        failed: &FundingRecord,
+    ) -> Result<(), ServiceError>;
     async fn queue_head(&self, key: &str) -> Result<Option<String>, ServiceError>;
     async fn pop_queue_head(&self, key: &str, expected: &str) -> Result<(), ServiceError>;
     async fn acquire_lock(&self, key: &str, token: &str, ttl_ms: u64)
@@ -148,6 +162,49 @@ impl FundingStore for RedisStore {
             .set::<_, _, ()>(key, value)
             .await
             .map_err(store_error)
+    }
+
+    async fn retry_reverted(
+        &self,
+        key: &str,
+        queue: &str,
+        failed: &FundingRecord,
+    ) -> Result<(), ServiceError> {
+        let FundingRecord::Failed {
+            fingerprint,
+            input,
+            transaction,
+            code,
+            ..
+        } = failed
+        else {
+            return Err(ServiceError::internal());
+        };
+        if code != "transaction_reverted" {
+            return Err(ServiceError::internal());
+        }
+        let queued = FundingRecord::Queued {
+            fingerprint: fingerprint.clone(),
+            input: input.clone(),
+        };
+        let changed: bool = Script::new(RETRY_REVERTED_SCRIPT)
+            .key(key)
+            .key(queue)
+            .key(format!("{key}:reverted:{}", transaction.hash))
+            .arg(serde_json::to_string(failed).map_err(store_error)?)
+            .arg(serde_json::to_string(&queued).map_err(store_error)?)
+            .invoke_async(&mut self.connection.clone())
+            .await
+            .map_err(store_error)?;
+        if !changed {
+            return Err(ServiceError::new(
+                409,
+                "retry_state_changed",
+                "Funding state changed before retry",
+            )
+            .retry(1));
+        }
+        Ok(())
     }
 
     async fn queue_head(&self, key: &str) -> Result<Option<String>, ServiceError> {
