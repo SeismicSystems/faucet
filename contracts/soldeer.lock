@@ -1,6 +1,6 @@
 [[dependencies]]
 name = "seismic-std-lib"
-version = "0.1.4"
-url = "https://soldeer-revisions.s3.amazonaws.com/seismic-std-lib/0_1_4_09-04-2026_11:00:23_seismic-std-lib.zip"
-checksum = "b167ff9c3a02a84bb2d6ba036ab31e448a059d81c3124bb58cde93dd421a9edb"
-integrity = "c5044550aeb7a2f03e97bd5e45db2a29be1b5cf072659686227a3089e6392f0a"
+version = "0.2.0"
+url = "https://soldeer-revisions.s3.amazonaws.com/seismic-std-lib/0_2_0_31-07-2026_11:12:06_seismic-std-lib.zip"
+checksum = "5b7bae55eab4b87e71c948c2d3fda81dbea1d29729bb56c19f012f1b317c92ea"
+integrity = "0b11b9a35a33a1990808d0ca1e82055563bdea7601557b3dd15ddf31b034db76"
