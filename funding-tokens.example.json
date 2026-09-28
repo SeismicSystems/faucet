@@ -1,0 +1,24 @@
+[
+  {
+    "contract_address": "0x1111111111111111111111111111111111111111",
+    "decimals": 6,
+    "max_transfer": "250000000",
+    "global_budget": "1000000000",
+    "reserve_floor": "0",
+    "funding": {
+      "kind": "caller_mint_whole_tokens",
+      "max_tokens_per_call": 100,
+      "max_calls": 4
+    }
+  },
+  {
+    "contract_address": "0x2222222222222222222222222222222222222222",
+    "decimals": 6,
+    "max_transfer": "250000000",
+    "global_budget": "1000000000",
+    "reserve_floor": "0",
+    "funding": {
+      "kind": "manual_inventory"
+    }
+  }
+]

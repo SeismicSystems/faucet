@@ -557,6 +557,7 @@ mod tests {
             private_key: format!("0x{}", "3".repeat(64)),
             reserve_address: reserve,
             token_address: Address::with_last_byte(0x10),
+            additional_erc20_tokens: Vec::new(),
             gas_eth_amount: U256::from(1_000_000_000_000_000u64),
             max_erc20_usdc_amount: U256::from(250_000_000u64),
             global_gas_eth_budget: U256::from(100_000_000_000_000_000u64),

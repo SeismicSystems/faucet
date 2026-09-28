@@ -1,3 +1,4 @@
+use crate::assets::{AssetError, FundingCatalog, FundingStrategy, FundingToken};
 use crate::model::{BaseNetworkIdentity, Erc20DeploymentIdentity};
 use alloy_primitives::{Address, U256};
 use std::{env, net::SocketAddr, str::FromStr, time::Duration};
@@ -15,6 +16,8 @@ const MINIMUM_TOKEN_LENGTH: usize = 32;
 const MINIMUM_GAS_SUSDC_AMOUNT: u64 = 100_000;
 const MAX_REDIS_INTEGER: u64 = i64::MAX as u64;
 const DEFAULT_BASE_CONFIRMATIONS: u64 = 1;
+const ADDITIONAL_BASE_TOKENS_VAR: &str = "INTERNAL_FUNDING_BASE_TOKEN_CATALOG_FILE";
+const BASE_TOKEN_DECIMALS: u8 = 6;
 
 #[derive(Clone)]
 pub struct Config {
@@ -74,6 +77,7 @@ pub struct BaseConfig {
     pub private_key: String,
     pub reserve_address: Address,
     pub token_address: Address,
+    pub additional_erc20_tokens: Vec<FundingToken>,
     pub gas_eth_amount: U256,
     pub max_erc20_usdc_amount: U256,
     pub global_gas_eth_budget: U256,
@@ -86,6 +90,20 @@ pub struct BaseConfig {
 }
 
 impl BaseConfig {
+    pub fn token_catalog(&self) -> Result<FundingCatalog, AssetError> {
+        FundingCatalog::new(
+            FundingToken {
+                contract_address: self.token_address,
+                decimals: BASE_TOKEN_DECIMALS,
+                max_transfer: self.max_erc20_usdc_amount,
+                global_budget: self.global_erc20_usdc_budget,
+                reserve_floor: self.erc20_usdc_reserve_floor,
+                funding: FundingStrategy::ManualInventory,
+            },
+            self.additional_erc20_tokens.clone(),
+        )
+    }
+
     pub fn identity(&self) -> BaseNetworkIdentity {
         BaseNetworkIdentity {
             chain_id: self.chain_id,
@@ -133,6 +151,14 @@ pub enum ConfigError {
     Missing(&'static str),
     #[error("{0} is invalid")]
     Invalid(&'static str),
+    #[error("token catalog file could not be read: {0}")]
+    CatalogRead(std::io::Error),
+    #[error("invalid token catalog JSON: {0}")]
+    CatalogJson(serde_json::Error),
+    #[error("invalid token catalog: {0}")]
+    CatalogValidation(AssetError),
+    #[error("token catalog contract must not equal the reserve address")]
+    CatalogReserveAddress,
     #[error("{0} must be at least {1} characters")]
     TooShort(&'static str, usize),
     #[error("{0} must be at least {1}")]
@@ -426,12 +452,26 @@ fn parse_base_config(
             .unwrap_or_else(|| max_erc20_usdc_amount.to_string()),
         "INTERNAL_FUNDING_BASE_ERC20_USDC_RESERVE_FLOOR",
     )?;
-    Ok(Some(BaseConfig {
+    let additional_erc20_tokens: Vec<FundingToken> = lookup(ADDITIONAL_BASE_TOKENS_VAR)
+        .map(|path| {
+            let contents = std::fs::read_to_string(path).map_err(ConfigError::CatalogRead)?;
+            serde_json::from_str(&contents).map_err(ConfigError::CatalogJson)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if additional_erc20_tokens
+        .iter()
+        .any(|token| token.contract_address == reserve_address)
+    {
+        return Err(ConfigError::CatalogReserveAddress);
+    }
+    let config = BaseConfig {
         rpc_url,
         chain_id,
         private_key,
         reserve_address,
         token_address,
+        additional_erc20_tokens,
         gas_eth_amount,
         max_erc20_usdc_amount,
         global_gas_eth_budget,
@@ -453,7 +493,11 @@ fn parse_base_config(
             DEFAULT_BASE_CONFIRMATIONS,
             "INTERNAL_FUNDING_BASE_CONFIRMATIONS",
         )?,
-    }))
+    };
+    config
+        .token_catalog()
+        .map_err(ConfigError::CatalogValidation)?;
+    Ok(Some(config))
 }
 
 fn validate_private_key(value: &str, name: &'static str) -> Result<(), ConfigError> {
@@ -593,6 +637,88 @@ mod tests {
         assert_eq!(config.request_timeout, Duration::from_secs(45));
         assert_eq!(config.erc20_usdc, Erc20UsdcActivation::Disabled);
         assert_eq!(config.base, BaseActivation::Disabled);
+    }
+
+    #[test]
+    fn additional_tokens_preserve_default_identity_and_require_explicit_strategy() {
+        let mut values = valid_env();
+        enable_base(&mut values);
+        let original = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        let original = original.base.enabled().unwrap();
+        let json = r#"[{"contract_address":"0x1111111111111111111111111111111111111111","decimals":6,"max_transfer":"250000000","global_budget":"1000000000","reserve_floor":"0","funding":{"kind":"caller_mint_whole_tokens","max_tokens_per_call":100,"max_calls":4}}]"#;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tokens.json");
+        std::fs::write(&path, json).unwrap();
+        values.insert(ADDITIONAL_BASE_TOKENS_VAR, path.to_str().unwrap().into());
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        let base = config.base.enabled().unwrap();
+        assert_eq!(base.identity(), original.identity());
+        assert_eq!(
+            base.token_catalog()
+                .unwrap()
+                .resolve(None)
+                .unwrap()
+                .contract_address,
+            original.token_address
+        );
+        assert_eq!(base.additional_erc20_tokens.len(), 1);
+        assert_eq!(
+            base.additional_erc20_tokens[0].max_transfer,
+            U256::from(250_000_000)
+        );
+        std::fs::write(
+            &path,
+            json.replace(
+                "0x1111111111111111111111111111111111111111",
+                &original.token_address.to_checksum(None),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            Config::from_lookup(|key| values.get(key).cloned())
+                .unwrap()
+                .base,
+            BaseActivation::Invalid(_)
+        ));
+        std::fs::write(&path, "not json").unwrap();
+        let invalid = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert!(
+            matches!(invalid.base, BaseActivation::Invalid(message) if message.contains("invalid token catalog JSON"))
+        );
+        std::fs::remove_file(&path).unwrap();
+        let missing = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert!(
+            matches!(missing.base, BaseActivation::Invalid(message) if message.contains("could not be read"))
+        );
+        values.insert("INTERNAL_FUNDING_BASE_ENABLED", "false".into());
+        assert_eq!(
+            Config::from_lookup(|key| values.get(key).cloned())
+                .unwrap()
+                .base,
+            BaseActivation::Disabled
+        );
+    }
+
+    #[test]
+    fn catalog_file_is_loaded_once_and_example_is_valid() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tokens.json");
+        std::fs::write(&path, include_str!("../../funding-tokens.example.json")).unwrap();
+        let mut values = valid_env();
+        enable_base(&mut values);
+        values.insert(ADDITIONAL_BASE_TOKENS_VAR, path.to_str().unwrap().into());
+        let loaded = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        let base = loaded.base.enabled().unwrap();
+        assert_eq!(base.additional_erc20_tokens.len(), 2);
+        std::fs::write(&path, "[]").unwrap();
+        assert_eq!(base.additional_erc20_tokens.len(), 2);
+        let reloaded = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        assert!(reloaded
+            .base
+            .enabled()
+            .unwrap()
+            .additional_erc20_tokens
+            .is_empty());
     }
 
     #[test]
