@@ -41,3 +41,6 @@ dump.rdb
 
 # Soldeer dependencies (reproducible via soldeer.lock)
 contracts/dependencies/
+
+# Deployment-specific token catalog
+/funding-tokens.json
