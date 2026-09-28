@@ -1,3 +1,4 @@
+use crate::assets::{AssetError, FundingCatalog, FundingStrategy, FundingToken};
 use crate::model::{BaseNetworkIdentity, Erc20DeploymentIdentity};
 use alloy_primitives::{Address, U256};
 use std::{env, net::SocketAddr, str::FromStr, time::Duration};
@@ -15,6 +16,8 @@ const MINIMUM_TOKEN_LENGTH: usize = 32;
 const MINIMUM_GAS_SUSDC_AMOUNT: u64 = 100_000;
 const MAX_REDIS_INTEGER: u64 = i64::MAX as u64;
 const DEFAULT_BASE_CONFIRMATIONS: u64 = 1;
+const ADDITIONAL_BASE_TOKENS_VAR: &str = "INTERNAL_FUNDING_BASE_ADDITIONAL_ERC20_TOKENS";
+const BASE_TOKEN_DECIMALS: u8 = 6;
 
 #[derive(Clone)]
 pub struct Config {
@@ -74,6 +77,7 @@ pub struct BaseConfig {
     pub private_key: String,
     pub reserve_address: Address,
     pub token_address: Address,
+    pub additional_erc20_tokens: Vec<FundingToken>,
     pub gas_eth_amount: U256,
     pub max_erc20_usdc_amount: U256,
     pub global_gas_eth_budget: U256,
@@ -86,6 +90,20 @@ pub struct BaseConfig {
 }
 
 impl BaseConfig {
+    pub fn token_catalog(&self) -> Result<FundingCatalog, AssetError> {
+        FundingCatalog::new(
+            FundingToken {
+                contract_address: self.token_address,
+                decimals: BASE_TOKEN_DECIMALS,
+                max_transfer: self.max_erc20_usdc_amount,
+                global_budget: self.global_erc20_usdc_budget,
+                reserve_floor: self.erc20_usdc_reserve_floor,
+                funding: FundingStrategy::ManualInventory,
+            },
+            self.additional_erc20_tokens.clone(),
+        )
+    }
+
     pub fn identity(&self) -> BaseNetworkIdentity {
         BaseNetworkIdentity {
             chain_id: self.chain_id,
@@ -426,12 +444,26 @@ fn parse_base_config(
             .unwrap_or_else(|| max_erc20_usdc_amount.to_string()),
         "INTERNAL_FUNDING_BASE_ERC20_USDC_RESERVE_FLOOR",
     )?;
-    Ok(Some(BaseConfig {
+    let additional_erc20_tokens: Vec<FundingToken> = lookup(ADDITIONAL_BASE_TOKENS_VAR)
+        .map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|_| ConfigError::Invalid(ADDITIONAL_BASE_TOKENS_VAR))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if additional_erc20_tokens
+        .iter()
+        .any(|token| token.contract_address == reserve_address)
+    {
+        return Err(ConfigError::Invalid(ADDITIONAL_BASE_TOKENS_VAR));
+    }
+    let config = BaseConfig {
         rpc_url,
         chain_id,
         private_key,
         reserve_address,
         token_address,
+        additional_erc20_tokens,
         gas_eth_amount,
         max_erc20_usdc_amount,
         global_gas_eth_budget,
@@ -453,7 +485,11 @@ fn parse_base_config(
             DEFAULT_BASE_CONFIRMATIONS,
             "INTERNAL_FUNDING_BASE_CONFIRMATIONS",
         )?,
-    }))
+    };
+    config
+        .token_catalog()
+        .map_err(|_| ConfigError::Invalid(ADDITIONAL_BASE_TOKENS_VAR))?;
+    Ok(Some(config))
 }
 
 fn validate_private_key(value: &str, name: &'static str) -> Result<(), ConfigError> {
@@ -593,6 +629,53 @@ mod tests {
         assert_eq!(config.request_timeout, Duration::from_secs(45));
         assert_eq!(config.erc20_usdc, Erc20UsdcActivation::Disabled);
         assert_eq!(config.base, BaseActivation::Disabled);
+    }
+
+    #[test]
+    fn additional_tokens_preserve_default_identity_and_require_explicit_strategy() {
+        let mut values = valid_env();
+        enable_base(&mut values);
+        let original = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        let original = original.base.enabled().unwrap();
+        let json = r#"[{"contract_address":"0x10b5Be494C2962A7B318aFB63f0Ee30b959D000b","decimals":6,"max_transfer":"250000000","global_budget":"1000000000","reserve_floor":"0","funding":{"kind":"caller_mint_whole_tokens","max_tokens_per_call":100,"max_calls":4}}]"#;
+        values.insert(ADDITIONAL_BASE_TOKENS_VAR, json.into());
+        let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
+        let base = config.base.enabled().unwrap();
+        assert_eq!(base.identity(), original.identity());
+        assert_eq!(
+            base.token_catalog()
+                .unwrap()
+                .resolve(None)
+                .unwrap()
+                .contract_address,
+            original.token_address
+        );
+        assert_eq!(base.additional_erc20_tokens.len(), 1);
+        assert_eq!(
+            base.additional_erc20_tokens[0].max_transfer,
+            U256::from(250_000_000)
+        );
+        values.insert(
+            ADDITIONAL_BASE_TOKENS_VAR,
+            json.replace(
+                "0x10b5Be494C2962A7B318aFB63f0Ee30b959D000b",
+                &original.token_address.to_checksum(None),
+            ),
+        );
+        assert!(matches!(
+            Config::from_lookup(|key| values.get(key).cloned())
+                .unwrap()
+                .base,
+            BaseActivation::Invalid(_)
+        ));
+        values.insert(ADDITIONAL_BASE_TOKENS_VAR, "not json".into());
+        values.insert("INTERNAL_FUNDING_BASE_ENABLED", "false".into());
+        assert_eq!(
+            Config::from_lookup(|key| values.get(key).cloned())
+                .unwrap()
+                .base,
+            BaseActivation::Disabled
+        );
     }
 
     #[test]

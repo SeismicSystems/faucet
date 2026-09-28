@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod base_chain;
 pub mod chain;
 pub mod config;

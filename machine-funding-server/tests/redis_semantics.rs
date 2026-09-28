@@ -334,6 +334,7 @@ fn base_config() -> BaseConfig {
         private_key: format!("0x{}", "3".repeat(64)),
         reserve_address: Address::from_str(BASE_RESERVE).unwrap(),
         token_address: Address::from_str(BASE_TOKEN).unwrap(),
+        additional_erc20_tokens: Vec::new(),
         gas_eth_amount: U256::from(BASE_GAS_WEI),
         max_erc20_usdc_amount: U256::from(250_000_000u64),
         global_gas_eth_budget: U256::from(100_000_000_000_000_000u64),
