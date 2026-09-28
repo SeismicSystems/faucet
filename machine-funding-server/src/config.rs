@@ -104,6 +104,30 @@ impl BaseConfig {
         )
     }
 
+    pub fn funding_token(&self, address: Address) -> Option<FundingToken> {
+        if address == self.token_address {
+            return Some(FundingToken {
+                contract_address: address,
+                decimals: BASE_TOKEN_DECIMALS,
+                max_transfer: self.max_erc20_usdc_amount,
+                global_budget: self.global_erc20_usdc_budget,
+                reserve_floor: self.erc20_usdc_reserve_floor,
+                funding: FundingStrategy::ManualInventory,
+            });
+        }
+        self.additional_erc20_tokens
+            .iter()
+            .find(|token| token.contract_address == address)
+            .cloned()
+    }
+
+    pub fn token_identity(&self, address: Address) -> BaseNetworkIdentity {
+        BaseNetworkIdentity {
+            token_address: address.to_checksum(None),
+            ..self.identity()
+        }
+    }
+
     pub fn identity(&self) -> BaseNetworkIdentity {
         BaseNetworkIdentity {
             chain_id: self.chain_id,

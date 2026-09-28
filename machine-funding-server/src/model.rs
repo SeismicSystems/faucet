@@ -161,6 +161,13 @@ pub enum FundingRecord {
         input: PersistedInput,
         transaction: PreparedTransaction,
     },
+    Replenishing {
+        fingerprint: String,
+        input: PersistedInput,
+        mints: Vec<PreparedTransaction>,
+        next_mint: usize,
+        transaction: PreparedTransaction,
+    },
     Completed {
         fingerprint: String,
         input: PersistedInput,
@@ -188,6 +195,7 @@ impl FundingRecord {
         match self {
             Self::Queued { fingerprint, .. }
             | Self::Prepared { fingerprint, .. }
+            | Self::Replenishing { fingerprint, .. }
             | Self::Completed { fingerprint, .. }
             | Self::Failed { fingerprint, .. }
             | Self::Rejected { fingerprint, .. } => fingerprint,
@@ -202,6 +210,16 @@ pub struct SusdcRequest {
     pub recipient: String,
     pub amount: String,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BaseTokenRequest {
+    pub idempotency_key: String,
+    pub recipient: String,
+    pub amount: String,
+    pub reason: String,
+    pub token_address: Option<Address>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

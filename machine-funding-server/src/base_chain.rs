@@ -4,6 +4,7 @@
 //! and persisted before broadcast like the Seismic driver's.
 
 use crate::{
+    assets::AssetError,
     chain::{
         chain_error, classify_broadcast_error, deployment_identity_error, rpc_timeout, ChainDriver,
     },
@@ -33,6 +34,7 @@ const ERC20_TRANSFER_GAS_LIMIT: u64 = 120_000;
 const FEE_HEADROOM_MULTIPLIER: u128 = 2;
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const EXPECTED_TOKEN_DECIMALS: u8 = 6;
+const MAX_MINT_GAS_LIMIT: u64 = 250_000;
 
 sol! {
     #[sol(rpc)]
@@ -82,6 +84,11 @@ impl BaseChainDriver {
             receipt_timeout,
         };
         driver.validate_token().await?;
+        for token in &config.additional_erc20_tokens {
+            driver
+                .validate_contract(token.contract_address, token.decimals)
+                .await?;
+        }
         driver.require_reserves().await?;
         Ok(driver)
     }
@@ -91,22 +98,42 @@ impl BaseChainDriver {
     }
 
     async fn validate_token(&self) -> Result<(), ServiceError> {
-        let code =
-            rpc_timeout(async { self.provider.get_code_at(self.config.token_address).await })
-                .await?;
+        self.validate_contract(self.config.token_address, EXPECTED_TOKEN_DECIMALS)
+            .await
+    }
+
+    async fn validate_contract(
+        &self,
+        address: alloy_primitives::Address,
+        expected: u8,
+    ) -> Result<(), ServiceError> {
+        let code = rpc_timeout(async { self.provider.get_code_at(address).await }).await?;
         if code.is_empty() {
-            return Err(chain_error(
-                "BASE_ERC20_USDC_TOKEN_ADDRESS has no deployed bytecode",
-            ));
-        }
-        let token = IERC20::new(self.config.token_address, &self.provider);
-        let decimals = rpc_timeout(async { token.decimals().call().await }).await?;
-        if decimals != EXPECTED_TOKEN_DECIMALS {
             return Err(chain_error(format!(
-                "Base ERC20 USDC token has {decimals} decimals; expected {EXPECTED_TOKEN_DECIMALS}"
+                "Configured token {address} has no deployed bytecode"
+            )));
+        }
+        let token = IERC20::new(address, &self.provider);
+        let decimals = rpc_timeout(async { token.decimals().call().await }).await?;
+        if decimals != expected {
+            return Err(chain_error(format!(
+                "Token {address} has {decimals} decimals; expected {expected}"
             )));
         }
         Ok(())
+    }
+
+    fn token_address(
+        &self,
+        input: &FundingInput,
+    ) -> Result<alloy_primitives::Address, ServiceError> {
+        input
+            .network_identity
+            .as_ref()
+            .ok_or_else(deployment_identity_error)?
+            .token_address
+            .parse()
+            .map_err(|_| deployment_identity_error())
     }
 
     /// Reads both reserve balances and compares them to the configured floors.
@@ -167,7 +194,7 @@ impl BaseChainDriver {
         let (to, value, data, gas) = match input.asset {
             FundingAsset::BaseEth => (input.recipient, input.amount, Bytes::new(), None),
             FundingAsset::BaseErc20Usdc => (
-                self.config.token_address,
+                self.token_address(input)?,
                 U256::ZERO,
                 IERC20::transferCall {
                     to: input.recipient,
@@ -209,6 +236,14 @@ impl BaseChainDriver {
                 rpc_timeout(async { self.provider.estimate_gas(request.clone()).await }).await?;
             request.gas = Some(eth_gas_limit(estimate)?);
         }
+        self.sign_request(request).await
+    }
+
+    async fn sign_request(
+        &self,
+        request: TransactionRequest,
+    ) -> Result<PreparedTransaction, ServiceError> {
+        let nonce = request.nonce.ok_or_else(ServiceError::internal)?;
         let envelope = TransactionBuilder::<Ethereum>::build(request, &self.wallet)
             .await
             .map_err(chain_error)?;
@@ -225,23 +260,21 @@ impl BaseChainDriver {
         match timeout(self.receipt_timeout, async {
             loop {
                 let receipt = rpc_timeout(self.provider.get_transaction_receipt(hash)).await?;
-                match receipt_status(receipt.as_ref()) {
-                    Some(ChainResult::Reverted) => return Ok(ChainResult::Reverted),
-                    Some(ChainResult::Success) => {
-                        let Some(receipt_block) = receipt
-                            .as_ref()
-                            .and_then(|confirmed| confirmed.block_number)
-                        else {
-                            return Err(ServiceError::internal());
-                        };
-                        let latest_block = rpc_timeout(self.provider.get_block_number()).await?;
-                        let required_block = receipt_block
-                            .saturating_add(self.config.confirmations.saturating_sub(1));
-                        if latest_block >= required_block {
-                            return Ok(ChainResult::Success);
-                        }
+                if let Some(result @ (ChainResult::Success | ChainResult::Reverted)) =
+                    receipt_status(receipt.as_ref())
+                {
+                    let Some(receipt_block) = receipt
+                        .as_ref()
+                        .and_then(|confirmed| confirmed.block_number)
+                    else {
+                        return Err(ServiceError::internal());
+                    };
+                    let latest_block = rpc_timeout(self.provider.get_block_number()).await?;
+                    let required_block =
+                        receipt_block.saturating_add(self.config.confirmations.saturating_sub(1));
+                    if latest_block >= required_block {
+                        return Ok(result);
                     }
-                    _ => {}
                 }
                 sleep(RECEIPT_POLL_INTERVAL).await;
             }
@@ -290,13 +323,21 @@ impl ChainDriver for BaseChainDriver {
     /// Only Base assets bound to this exact deployment are signed; a request
     /// persisted under a rotated token or reserve is rejected before signing.
     fn validate_input(&self, input: &FundingInput) -> Result<(), ServiceError> {
-        if input.asset.is_base()
-            && input.deployment_identity.is_none()
-            && input.network_identity.as_ref() == Some(&self.config.identity())
-        {
-            return Ok(());
+        if !input.asset.is_base() || input.deployment_identity.is_some() {
+            return Err(deployment_identity_error());
         }
-        Err(deployment_identity_error())
+        let address = self.token_address(input)?;
+        if input.network_identity.as_ref() != Some(&self.config.token_identity(address)) {
+            return Err(deployment_identity_error());
+        }
+        // Limits apply when admitting new requests, not while recovering signed
+        // transactions after an operator lowers a configuration limit.
+        match input.asset {
+            FundingAsset::BaseEth if address == self.config.token_address => {}
+            FundingAsset::BaseErc20Usdc if self.config.funding_token(address).is_some() => {}
+            _ => return Err(deployment_identity_error()),
+        }
+        Ok(())
     }
 
     async fn pending_nonce(&self) -> Result<u64, ServiceError> {
@@ -328,6 +369,101 @@ impl ChainDriver for BaseChainDriver {
         .await
     }
 
+    async fn prepare_funding(
+        &self,
+        input: &FundingInput,
+        nonce: u64,
+    ) -> Result<(Vec<PreparedTransaction>, PreparedTransaction), ServiceError> {
+        self.validate_input(input)?;
+        let address = self.token_address(input)?;
+        // Keep the deployed default-token and gas paths unchanged.
+        if input.asset != FundingAsset::BaseErc20Usdc || address == self.config.token_address {
+            return Ok((Vec::new(), self.prepare(input, nonce).await?));
+        }
+        let token = self
+            .config
+            .funding_token(address)
+            .ok_or_else(deployment_identity_error)?;
+        self.validate_contract(address, token.decimals).await?;
+        let contract = IERC20::new(address, &self.provider);
+        let balance =
+            rpc_timeout(async { contract.balanceOf(self.config.reserve_address).call().await })
+                .await?;
+        let plan = token.replenishment(balance, input.amount).map_err(|error| match error {
+            AssetError::ManualFundingRequired => ServiceError::new(409, "manual_funding_required", "Automatic funding is unavailable for this token's current inventory; fund the recipient manually"),
+            AssetError::MintLimitExceeded => ServiceError::new(409, "mint_limit_exceeded", "Required reserve replenishment exceeds the configured mint limit"),
+            _ => ServiceError::internal(),
+        })?;
+        let payout_nonce = nonce
+            .checked_add(plan.calldata.len() as u64)
+            .ok_or_else(ServiceError::internal)?;
+        let fees = rpc_timeout(self.provider.estimate_eip1559_fees()).await?;
+        let max_fee = fees
+            .max_fee_per_gas
+            .checked_mul(FEE_HEADROOM_MULTIPLIER)
+            .ok_or_else(ServiceError::internal)?;
+        let mut mints = Vec::new();
+        for (offset, calldata) in plan.calldata.into_iter().enumerate() {
+            let mut request = TransactionRequest {
+                from: Some(self.config.reserve_address),
+                to: Some(TxKind::Call(address)),
+                value: Some(U256::ZERO),
+                input: TransactionInput::from(calldata),
+                nonce: Some(nonce + offset as u64),
+                chain_id: Some(self.config.chain_id),
+                max_fee_per_gas: Some(max_fee),
+                max_priority_fee_per_gas: Some(fees.max_priority_fee_per_gas),
+                ..Default::default()
+            };
+            let estimate =
+                rpc_timeout(async { self.provider.estimate_gas(request.clone()).await }).await?;
+            let gas = estimate
+                .checked_add(estimate.div_ceil(GAS_HEADROOM_DIVISOR))
+                .filter(|gas| *gas <= MAX_MINT_GAS_LIMIT)
+                .ok_or_else(|| chain_error("Mint gas estimate exceeds the supported budget"))?;
+            request.gas = Some(gas);
+            mints.push(self.sign_request(request).await?);
+        }
+        let payout = self
+            .sign_transaction(input, payout_nonce, max_fee, fees.max_priority_fee_per_gas)
+            .await?;
+        Ok((mints, payout))
+    }
+
+    async fn verify_payout(
+        &self,
+        input: &FundingInput,
+        transaction: &PreparedTransaction,
+    ) -> Result<bool, ServiceError> {
+        if input.asset != FundingAsset::BaseErc20Usdc
+            || self.token_address(input)? == self.config.token_address
+        {
+            return Ok(true);
+        }
+        let receipt = rpc_timeout(
+            self.provider
+                .get_transaction_receipt(transaction.hash.parse().map_err(chain_error)?),
+        )
+        .await?
+        .ok_or_else(|| chain_error("Confirmed payout receipt is unavailable"))?;
+        if receipt.transaction_hash != transaction.hash.parse::<B256>().map_err(chain_error)?
+            || receipt_status(Some(&receipt)) != Some(ChainResult::Success)
+        {
+            return Ok(false);
+        }
+        let address = self.token_address(input)?;
+        let topics = [
+            keccak256("Transfer(address,address,uint256)"),
+            self.config.reserve_address.into_word(),
+            input.recipient.into_word(),
+        ];
+        Ok(receipt.inner.logs().iter().any(|log| {
+            log.address() == address
+                && log.topics() == topics
+                && log.data().data.as_ref() == input.amount.to_be_bytes::<32>()
+        }))
+    }
+
     async fn broadcast_and_confirm(
         &self,
         transaction: &PreparedTransaction,
@@ -335,6 +471,14 @@ impl ChainDriver for BaseChainDriver {
         let raw = hex::decode(transaction.serialized_transaction.trim_start_matches("0x"))
             .map_err(chain_error)?;
         let expected_hash = B256::from_str(&transaction.hash).map_err(chain_error)?;
+        // A mined transaction may be rejected on rebroadcast (for example after
+        // its gas depleted the reserve). Its receipt is authoritative on recovery.
+        if rpc_timeout(self.provider.get_transaction_receipt(expected_hash))
+            .await?
+            .is_some()
+        {
+            return self.receipt_result(expected_hash).await;
+        }
         match timeout(
             crate::chain::RPC_REQUEST_TIMEOUT,
             self.provider.send_raw_transaction(&raw),
@@ -350,6 +494,12 @@ impl ChainDriver for BaseChainDriver {
             Ok(Err(error)) => {
                 let message = error.to_string();
                 if let Some(result) = classify_broadcast_error(&message) {
+                    if rpc_timeout(self.provider.get_transaction_receipt(expected_hash))
+                        .await?
+                        .is_some()
+                    {
+                        return self.receipt_result(expected_hash).await;
+                    }
                     return Ok(result);
                 }
                 tracing::warn!(%message, hash = %transaction.hash, "Base raw transaction broadcast was not acknowledged");
@@ -722,3 +872,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "base_chain/token_tests.rs"]
+mod token_tests;

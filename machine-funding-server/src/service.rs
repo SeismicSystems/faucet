@@ -128,7 +128,7 @@ where
             input: PersistedInput::from(&input),
         };
         let amount = input.amount.to_string();
-        let budget = self.global_budget(input.asset)?.to_string();
+        let budget = self.global_budget(&input)?.to_string();
         let recipient_rate_key = recipient_rate_key(&input, &asset_scope);
         let global_budget_key = global_budget_key(input.asset, &asset_scope);
         let reservation = self
@@ -360,15 +360,18 @@ where
         }
 
         let pending_input = match &record {
-            FundingRecord::Queued { input, .. } | FundingRecord::Prepared { input, .. } => {
-                FundingInput::try_from(input)?
-            }
+            FundingRecord::Queued { input, .. }
+            | FundingRecord::Prepared { input, .. }
+            | FundingRecord::Replenishing { input, .. } => FundingInput::try_from(input)?,
             _ => return Err(ServiceError::internal()),
         };
         if let Err(error) = self.driver.validate_input(&pending_input) {
             let (fingerprint, input) = match record {
                 FundingRecord::Queued { fingerprint, input }
                 | FundingRecord::Prepared {
+                    fingerprint, input, ..
+                }
+                | FundingRecord::Replenishing {
                     fingerprint, input, ..
                 } => (fingerprint, input),
                 _ => return Err(ServiceError::internal()),
@@ -386,13 +389,107 @@ where
 
         if let FundingRecord::Queued { fingerprint, input } = record {
             let nonce = self.driver.pending_nonce().await?;
-            let transaction = self.driver.prepare(&pending_input, nonce).await?;
-            record = FundingRecord::Prepared {
-                fingerprint,
-                input,
-                transaction,
+            let (mints, transaction) =
+                match self.driver.prepare_funding(&pending_input, nonce).await {
+                    Ok(batch) => batch,
+                    Err(error)
+                        if matches!(
+                            error.code.as_str(),
+                            "manual_funding_required" | "mint_limit_exceeded"
+                        ) =>
+                    {
+                        let rejected = FundingRecord::Rejected {
+                            fingerprint,
+                            input,
+                            code: error.code,
+                            message: error.message,
+                        };
+                        self.store.set_record(record_key, &rejected).await?;
+                        self.store.pop_queue_head(queue, record_key).await?;
+                        return Ok(rejected);
+                    }
+                    Err(error) => return Err(error),
+                };
+            record = if mints.is_empty() {
+                FundingRecord::Prepared {
+                    fingerprint,
+                    input,
+                    transaction,
+                }
+            } else {
+                FundingRecord::Replenishing {
+                    fingerprint,
+                    input,
+                    mints,
+                    next_mint: 0,
+                    transaction,
+                }
             };
             self.store.set_record(record_key, &record).await?;
+        }
+
+        while let FundingRecord::Replenishing {
+            fingerprint,
+            input,
+            mints,
+            next_mint,
+            transaction,
+        } = &record
+        {
+            if *next_mint > mints.len() {
+                return Err(ServiceError::internal());
+            }
+            if *next_mint == mints.len() {
+                record = FundingRecord::Prepared {
+                    fingerprint: fingerprint.clone(),
+                    input: input.clone(),
+                    transaction: transaction.clone(),
+                };
+                self.store.set_record(record_key, &record).await?;
+                break;
+            }
+            let mint = &mints[*next_mint];
+            match self.driver.broadcast_and_confirm(mint).await? {
+                ChainResult::Pending => {
+                    return Err(ServiceError::new(
+                        504,
+                        "transaction_pending",
+                        "Reserve mint is pending; retry this request unchanged",
+                    )
+                    .retry(1)
+                    .transaction(&mint.hash))
+                }
+                ChainResult::Success => {
+                    record = FundingRecord::Replenishing {
+                        fingerprint: fingerprint.clone(),
+                        input: input.clone(),
+                        mints: mints.clone(),
+                        next_mint: next_mint + 1,
+                        transaction: transaction.clone(),
+                    };
+                    self.store.set_record(record_key, &record).await?;
+                }
+                result => {
+                    let (code, message) = match result {
+                        ChainResult::Reverted => {
+                            ("mint_reverted", "Reserve mint reverted".to_owned())
+                        }
+                        ChainResult::Rejected(message) => ("mint_rejected", message),
+                        _ => unreachable!(),
+                    };
+                    let failed = FundingRecord::Failed {
+                        fingerprint: fingerprint.clone(),
+                        input: input.clone(),
+                        transaction: mint.clone(),
+                        code: code.into(),
+                        message,
+                        transaction_hash: mint.hash.clone(),
+                    };
+                    self.store.set_record(record_key, &failed).await?;
+                    self.store.pop_queue_head(queue, record_key).await?;
+                    return Ok(failed);
+                }
+            }
         }
 
         let (fingerprint, input, transaction) = match &record {
@@ -403,7 +500,17 @@ where
             } => (fingerprint.clone(), input.clone(), transaction.clone()),
             _ => return Err(ServiceError::internal()),
         };
-        let result = self.driver.broadcast_and_confirm(&transaction).await?;
+        let mut result = self.driver.broadcast_and_confirm(&transaction).await?;
+        if result == ChainResult::Success
+            && !self
+                .driver
+                .verify_payout(&pending_input, &transaction)
+                .await?
+        {
+            result = ChainResult::Rejected(
+                "Confirmed transaction did not emit the expected token transfer".into(),
+            );
+        }
         let terminal = match result {
             ChainResult::Pending => {
                 return Err(ServiceError::new(
@@ -451,17 +558,33 @@ where
         Ok(terminal)
     }
 
-    fn global_budget(&self, asset: FundingAsset) -> Result<U256, ServiceError> {
-        match asset {
+    fn global_budget(&self, input: &FundingInput) -> Result<U256, ServiceError> {
+        match input.asset {
             FundingAsset::Susdc => Ok(self.config.global_susdc_budget),
             FundingAsset::SusdcGas => Ok(self.config.global_gas_susdc_budget),
             FundingAsset::Erc20Usdc => self.erc20_config().map(|config| config.global_budget),
             FundingAsset::BaseEth => self
                 .base_config()
                 .map(|config| config.global_gas_eth_budget),
-            FundingAsset::BaseErc20Usdc => self
-                .base_config()
-                .map(|config| config.global_erc20_usdc_budget),
+            FundingAsset::BaseErc20Usdc => {
+                let address = input
+                    .network_identity
+                    .as_ref()
+                    .ok_or_else(base_unavailable)?
+                    .token_address
+                    .parse()
+                    .map_err(|_| ServiceError::internal())?;
+                self.base_config()?
+                    .funding_token(address)
+                    .map(|token| token.global_budget)
+                    .ok_or_else(|| {
+                        ServiceError::new(
+                            400,
+                            "unsupported_token",
+                            "Token contract is not in the enabled Base catalog",
+                        )
+                    })
+            }
         }
     }
 
@@ -539,7 +662,9 @@ fn terminal_result(
             ..
         } => Err(ServiceError::new(422, code, message).transaction(transaction_hash)),
         FundingRecord::Rejected { code, message, .. } => Err(ServiceError::new(409, code, message)),
-        FundingRecord::Queued { .. } | FundingRecord::Prepared { .. } => Ok(None),
+        FundingRecord::Queued { .. }
+        | FundingRecord::Prepared { .. }
+        | FundingRecord::Replenishing { .. } => Ok(None),
     }
 }
 
