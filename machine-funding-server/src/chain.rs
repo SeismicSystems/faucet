@@ -78,6 +78,21 @@ pub trait ChainDriver: Clone + Send + Sync + 'static {
         input: &FundingInput,
         nonce: u64,
     ) -> Result<PreparedTransaction, ServiceError>;
+    /// The entire batch must be persisted before broadcasting any transaction.
+    async fn prepare_funding(
+        &self,
+        input: &FundingInput,
+        nonce: u64,
+    ) -> Result<(Vec<PreparedTransaction>, PreparedTransaction), ServiceError> {
+        Ok((Vec::new(), self.prepare(input, nonce).await?))
+    }
+    async fn verify_payout(
+        &self,
+        _input: &FundingInput,
+        _transaction: &PreparedTransaction,
+    ) -> Result<bool, ServiceError> {
+        Ok(true)
+    }
     async fn broadcast_and_confirm(
         &self,
         transaction: &PreparedTransaction,

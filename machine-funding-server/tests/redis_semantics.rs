@@ -110,6 +110,10 @@ struct FakeDriver {
     network_identity: Option<BaseNetworkIdentity>,
     reserves: Option<ReserveDiagnostic>,
     retry_legacy: bool,
+    additional_tokens: Vec<Address>,
+    mint_count: usize,
+    preparation_error: Option<&'static str>,
+    valid_payout: bool,
 }
 
 struct FakeState {
@@ -133,6 +137,10 @@ impl FakeDriver {
             network_identity: None,
             reserves: None,
             retry_legacy: false,
+            additional_tokens: Vec::new(),
+            mint_count: 0,
+            preparation_error: None,
+            valid_payout: true,
         }
     }
 
@@ -190,7 +198,17 @@ impl ChainDriver for FakeDriver {
             )
         };
         if let Some(identity) = &self.network_identity {
-            return if input.asset.is_base() && input.network_identity.as_ref() == Some(identity) {
+            return if input.asset.is_base()
+                && input.network_identity.as_ref().is_some_and(|actual| {
+                    actual.chain_id == identity.chain_id
+                        && actual.reserve_address == identity.reserve_address
+                        && (actual.token_address == identity.token_address
+                            || (input.asset == FundingAsset::BaseErc20Usdc
+                                && actual
+                                    .token_address
+                                    .parse::<Address>()
+                                    .is_ok_and(|token| self.additional_tokens.contains(&token))))
+                }) {
                 Ok(())
             } else {
                 Err(mismatch())
@@ -236,6 +254,40 @@ impl ChainDriver for FakeDriver {
             .prepared
             .push(transaction.clone());
         Ok(transaction)
+    }
+
+    async fn prepare_funding(
+        &self,
+        input: &FundingInput,
+        nonce: u64,
+    ) -> Result<(Vec<PreparedTransaction>, PreparedTransaction), ServiceError> {
+        let extra = input.network_identity.as_ref().is_some_and(|identity| {
+            identity
+                .token_address
+                .parse::<Address>()
+                .is_ok_and(|token| self.additional_tokens.contains(&token))
+        });
+        if extra {
+            if let Some(code) = self.preparation_error {
+                return Err(ServiceError::new(409, code, "Fund manually"));
+            }
+        }
+        let mut mints = Vec::new();
+        if extra {
+            for offset in 0..self.mint_count {
+                mints.push(self.prepare(input, nonce + offset as u64).await?);
+            }
+        }
+        let payout = self.prepare(input, nonce + mints.len() as u64).await?;
+        Ok((mints, payout))
+    }
+
+    async fn verify_payout(
+        &self,
+        _input: &FundingInput,
+        _transaction: &PreparedTransaction,
+    ) -> Result<bool, ServiceError> {
+        Ok(self.valid_payout)
     }
 
     async fn broadcast_and_confirm(
@@ -1419,3 +1471,5 @@ async fn base_readiness_reports_a_low_reserve_as_unavailable() {
     assert_eq!(readiness.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(json_body(readiness).await["error"]["code"], "reserve_low");
 }
+
+mod token_runtime;

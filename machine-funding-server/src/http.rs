@@ -1,22 +1,25 @@
 use crate::{
     chain::ChainDriver,
     model::{
-        ErrorBody, ErrorEnvelope, FundingAsset, FundingInput, FundingResponse, GasRequest,
-        ReserveDiagnostic, ServiceError, SusdcRequest,
+        BaseTokenRequest, ErrorBody, ErrorEnvelope, FundingAsset, FundingInput, FundingResponse,
+        GasRequest, ReserveDiagnostic, ServiceError, SusdcRequest,
     },
     service::{base_unavailable, FundingService},
     store::FundingStore,
 };
 use alloy_primitives::{Address, U256};
 use axum::{
-    extract::{rejection::JsonRejection, State},
+    extract::{
+        rejection::{JsonRejection, QueryRejection},
+        Query, State,
+    },
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     str::FromStr,
@@ -103,6 +106,10 @@ where
             post(base_erc20_usdc_transfer::<S, D, B>),
         )
         .route(
+            "/api/internal/base/erc20/transfers",
+            post(base_erc20_usdc_transfer::<S, D, B>),
+        )
+        .route(
             "/api/internal/base/readiness",
             get(base_readiness::<S, D, B>),
         )
@@ -120,9 +127,16 @@ struct SettlementIdentity {
     treasury_address: Address,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BaseTokenQuery {
+    token_address: Option<Address>,
+}
+
 async fn base_settlement<S: FundingStore, D: ChainDriver, B: ChainDriver>(
     State(state): State<Arc<RouterState<S, D, B>>>,
     headers: HeaderMap,
+    query: Result<Query<BaseTokenQuery>, QueryRejection>,
 ) -> Result<Json<SettlementIdentity>, ServiceError> {
     authorize(&headers, &state.legacy.config().token)?;
     let service = base_service(&state)?;
@@ -131,9 +145,14 @@ async fn base_settlement<S: FundingStore, D: ChainDriver, B: ChainDriver>(
         .base
         .enabled()
         .ok_or_else(base_unavailable)?;
+    let Query(query) =
+        query.map_err(|_| ServiceError::new(400, "invalid_request", "Invalid token selection"))?;
+    let token = config
+        .funding_token(query.token_address.unwrap_or(config.token_address))
+        .ok_or_else(unsupported_token)?;
     Ok(Json(SettlementIdentity {
         chain_id: config.chain_id,
-        token_address: config.token_address,
+        token_address: token.contract_address,
         treasury_address: config.reserve_address,
     }))
 }
@@ -276,7 +295,7 @@ where
 async fn base_erc20_usdc_transfer<S, D, B>(
     State(state): State<Arc<RouterState<S, D, B>>>,
     headers: HeaderMap,
-    payload: Result<Json<SusdcRequest>, JsonRejection>,
+    payload: Result<Json<BaseTokenRequest>, JsonRejection>,
 ) -> Result<Json<FundingResponse>, ServiceError>
 where
     S: FundingStore,
@@ -292,11 +311,14 @@ where
         .ok_or_else(base_unavailable)?;
     let Json(request) = payload.map_err(invalid_json)?;
     let common = validate_common(request.idempotency_key, request.recipient, request.reason)?;
-    let amount = parse_amount(&request.amount, base.max_erc20_usdc_amount)?;
+    let token = base
+        .funding_token(request.token_address.unwrap_or(base.token_address))
+        .ok_or_else(unsupported_token)?;
+    let amount = parse_amount(&request.amount, token.max_transfer)?;
     service
         .execute(FundingInput {
             asset: FundingAsset::BaseErc20Usdc,
-            network_identity: Some(base.identity()),
+            network_identity: Some(base.token_identity(token.contract_address)),
             amount,
             ..common
         })
@@ -410,6 +432,14 @@ where
     }
 }
 
+fn unsupported_token() -> ServiceError {
+    ServiceError::new(
+        400,
+        "unsupported_token",
+        "Token contract is not in the enabled Base catalog",
+    )
+}
+
 fn erc20_unavailable() -> ServiceError {
     ServiceError::new(
         503,
@@ -511,14 +541,14 @@ fn parse_amount(value: &str, maximum: U256) -> Result<U256, ServiceError> {
         return Err(ServiceError::new(
             400,
             "invalid_amount",
-            "amount must be a positive decimal string in 6-decimal base units",
+            "amount must be a positive decimal string in token base units",
         ));
     }
     let amount = U256::from_str_radix(value, 10).map_err(|_| {
         ServiceError::new(
             400,
             "invalid_amount",
-            "amount must be a positive decimal string in 6-decimal base units",
+            "amount must be a positive decimal string in token base units",
         )
     })?;
     if amount > maximum {
