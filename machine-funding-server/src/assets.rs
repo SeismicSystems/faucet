@@ -178,9 +178,9 @@ fn decimal_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<U256, D:
 mod tests {
     use super::*;
 
-    fn rusd() -> FundingToken {
+    fn mintable_token() -> FundingToken {
         FundingToken {
-            contract_address: "0x10b5Be494C2962A7B318aFB63f0Ee30b959D000b"
+            contract_address: "0x1111111111111111111111111111111111111111"
                 .parse()
                 .unwrap(),
             decimals: 6,
@@ -195,8 +195,8 @@ mod tests {
     }
 
     #[test]
-    fn rusd_uses_whole_tokens_and_bounded_chunks() {
-        let token = rusd();
+    fn mintable_token_uses_whole_tokens_and_bounded_chunks() {
+        let token = mintable_token();
         let plan = token
             .replenishment(U256::ZERO, U256::from(250_000_001))
             .unwrap();
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn manual_inventory_can_pay_but_cannot_replenish() {
-        let mut token = rusd();
+        let mut token = mintable_token();
         token.funding = FundingStrategy::ManualInventory;
         assert!(token
             .replenishment(U256::from(10), U256::from(10))
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn replenishment_accounts_for_existing_balance_and_floor() {
-        let mut token = rusd();
+        let mut token = mintable_token();
         token.reserve_floor = U256::from(100_000_000);
         let plan = token
             .replenishment(U256::from(99_999_999), U256::from(1))
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn catalog_defaults_are_stable_and_unknown_contracts_do_not_fallback() {
-        let default = rusd();
+        let default = mintable_token();
         let mut other = default.clone();
         other.contract_address = Address::with_last_byte(1);
         other.funding = FundingStrategy::ManualInventory;
@@ -268,19 +268,19 @@ mod tests {
 
     #[test]
     fn unsafe_limits_and_ambiguous_amounts_are_rejected() {
-        let mut token = rusd();
+        let mut token = mintable_token();
         token.decimals = 19;
         assert_eq!(token.validate(), Err(AssetError::InvalidIdentity));
-        token = rusd();
+        token = mintable_token();
         token.global_budget = U256::from(1);
         assert_eq!(token.validate(), Err(AssetError::InvalidLimits));
-        token = rusd();
+        token = mintable_token();
         token.funding = FundingStrategy::CallerMintWholeTokens {
             max_tokens_per_call: 100,
             max_calls: 33,
         };
         assert_eq!(token.validate(), Err(AssetError::InvalidMintLimits));
-        let json = r#"{"contract_address":"0x10b5be494c2962a7b318afb63f0ee30b959d000b","decimals":6,"max_transfer":"100","global_budget":"200","reserve_floor":"0","funding":{"kind":"manual_inventory"}}"#;
+        let json = r#"{"contract_address":"0x1111111111111111111111111111111111111111","decimals":6,"max_transfer":"100","global_budget":"200","reserve_floor":"0","funding":{"kind":"manual_inventory"}}"#;
         assert_eq!(
             serde_json::from_str::<FundingToken>(json)
                 .unwrap()

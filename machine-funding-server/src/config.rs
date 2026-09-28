@@ -637,7 +637,7 @@ mod tests {
         enable_base(&mut values);
         let original = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
         let original = original.base.enabled().unwrap();
-        let json = r#"[{"contract_address":"0x10b5Be494C2962A7B318aFB63f0Ee30b959D000b","decimals":6,"max_transfer":"250000000","global_budget":"1000000000","reserve_floor":"0","funding":{"kind":"caller_mint_whole_tokens","max_tokens_per_call":100,"max_calls":4}}]"#;
+        let json = r#"[{"contract_address":"0x1111111111111111111111111111111111111111","decimals":6,"max_transfer":"250000000","global_budget":"1000000000","reserve_floor":"0","funding":{"kind":"caller_mint_whole_tokens","max_tokens_per_call":100,"max_calls":4}}]"#;
         values.insert(ADDITIONAL_BASE_TOKENS_VAR, json.into());
         let config = Config::from_lookup(|key| values.get(key).cloned()).unwrap();
         let base = config.base.enabled().unwrap();
@@ -658,7 +658,7 @@ mod tests {
         values.insert(
             ADDITIONAL_BASE_TOKENS_VAR,
             json.replace(
-                "0x10b5Be494C2962A7B318aFB63f0Ee30b959D000b",
+                "0x1111111111111111111111111111111111111111",
                 &original.token_address.to_checksum(None),
             ),
         );
