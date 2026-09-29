@@ -79,6 +79,42 @@ async function getNonceForChain(
   return await publicClient.getTransactionCount({ address: operatorAddress });
 }
 
+// Redis-based mutex so two concurrent drips on the same chain can never read
+// and reserve the same nonce. Without this, getNonceForChain's read (GET) and
+// processDrip's write (SET nonce+1) race: two requests can both read the same
+// cached nonce before either writes the increment, so both transactions get
+// sent with the same nonce. One of them silently fails/gets dropped on-chain,
+// while claim/new.ts still reports success and applies the 24h cooldown to
+// that user, so they never actually receive tokens.
+const NONCE_LOCK_TTL_MS = 10_000;
+const NONCE_LOCK_MAX_WAIT_MS = 5_000;
+const NONCE_LOCK_RETRY_DELAY_MS = 100;
+
+async function acquireNonceLock(chainName: string): Promise<string | null> {
+  const lockKey = `nonce-lock-${chainName}`;
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const deadline = Date.now() + NONCE_LOCK_MAX_WAIT_MS;
+
+  while (Date.now() < deadline) {
+    const ok = await client.set(lockKey, token, "PX", NONCE_LOCK_TTL_MS, "NX");
+    if (ok === "OK") {
+      return token;
+    }
+    await new Promise((resolve) => setTimeout(resolve, NONCE_LOCK_RETRY_DELAY_MS));
+  }
+
+  return null;
+}
+
+async function releaseNonceLock(chainName: string, token: string): Promise<void> {
+  const lockKey = `nonce-lock-${chainName}`;
+  // Only release if we still hold the lock (avoid deleting a lock that
+  // expired and was re-acquired by someone else in the meantime).
+  const script =
+    'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end';
+  await client.eval(script, 1, lockKey, token);
+}
+
 async function processDrip(
   account: ReturnType<typeof privateKeyToAccount>,
   chain: Chain,
@@ -100,34 +136,45 @@ async function processDrip(
     transport: http(),
   });
 
-  const nonce = await getNonceForChain(chain, account.address);
-  const gasPrice = await publicClient.getGasPrice();
-
-  console.log(`[processDrip] Nonce: ${nonce}, Gas price: ${gasPrice}`);
-
-  // Update nonce in redis with 5m TTL
-  await client.set(`nonce-${chain.name}`, nonce + 1, "EX", 300);
+  const lockToken = await acquireNonceLock(chain.name);
+  if (!lockToken) {
+    throw new Error(
+      `Timed out waiting for nonce lock on ${chain.name}; another drip is in progress`,
+    );
+  }
 
   try {
-    console.log(`[processDrip] Sending transaction...`);
-    const txHash = await walletClient.sendTransaction({
-      to: faucetAddress,
-      data,
-      gasPrice: gasPrice * BigInt(2),
-      gas: BigInt(500_000),
-      nonce,
-    });
-    console.log(`[processDrip] Transaction sent! Hash: ${txHash}`);
-  } catch (e: any) {
-    console.error(`[processDrip] ERROR: ${e.message || String(e)}`);
-    const errorMsg = `Error dripping for ${chain.name}: ${e.message || String(e)}`;
-    await postSlackMessage(errorMsg);
+    const nonce = await getNonceForChain(chain, account.address);
+    const gasPrice = await publicClient.getGasPrice();
 
-    // Attempt self-heal by clearing nonce
-    await client.del(`nonce-${chain.name}`);
-    await postSlackMessage(`Attempting self heal for ${chain.name}`);
+    console.log(`[processDrip] Nonce: ${nonce}, Gas price: ${gasPrice}`);
 
-    throw new Error(`Error when processing drip for ${chain.name}`);
+    // Update nonce in redis with 5m TTL
+    await client.set(`nonce-${chain.name}`, nonce + 1, "EX", 300);
+
+    try {
+      console.log(`[processDrip] Sending transaction...`);
+      const txHash = await walletClient.sendTransaction({
+        to: faucetAddress,
+        data,
+        gasPrice: gasPrice * BigInt(2),
+        gas: BigInt(500_000),
+        nonce,
+      });
+      console.log(`[processDrip] Transaction sent! Hash: ${txHash}`);
+    } catch (e: any) {
+      console.error(`[processDrip] ERROR: ${e.message || String(e)}`);
+      const errorMsg = `Error dripping for ${chain.name}: ${e.message || String(e)}`;
+      await postSlackMessage(errorMsg);
+
+      // Attempt self-heal by clearing nonce
+      await client.del(`nonce-${chain.name}`);
+      await postSlackMessage(`Attempting self heal for ${chain.name}`);
+
+      throw new Error(`Error when processing drip for ${chain.name}`);
+    }
+  } finally {
+    await releaseNonceLock(chain.name, lockToken);
   }
 }
 
