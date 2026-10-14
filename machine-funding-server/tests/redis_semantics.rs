@@ -121,6 +121,7 @@ struct FakeState {
     prepared: Vec<PreparedTransaction>,
     broadcasts: Vec<PreparedTransaction>,
     prepare_delay: Duration,
+    inventory_short: bool,
 }
 
 impl FakeDriver {
@@ -131,6 +132,7 @@ impl FakeDriver {
                 prepared: Vec::new(),
                 broadcasts: Vec::new(),
                 prepare_delay: Duration::ZERO,
+                inventory_short: false,
             })),
             operator_key: "5124:0xmachine".into(),
             deployment_identity: None,
@@ -167,6 +169,10 @@ impl FakeDriver {
     fn with_prepare_delay(self, delay: Duration) -> Self {
         self.inner.lock().unwrap().prepare_delay = delay;
         self
+    }
+
+    fn set_inventory_short(&self, short: bool) {
+        self.inner.lock().unwrap().inventory_short = short;
     }
 
     fn counts(&self) -> (usize, usize) {
@@ -230,6 +236,13 @@ impl ChainDriver for FakeDriver {
             }
             _ => Err(mismatch()),
         }
+    }
+
+    async fn check_inventory(&self, _input: &FundingInput) -> Result<(), ServiceError> {
+        if self.inner.lock().unwrap().inventory_short {
+            return Err(ServiceError::new(503, "reserve_insufficient", "Restock").retry(60));
+        }
+        Ok(())
     }
 
     async fn pending_nonce(&self) -> Result<u64, ServiceError> {
@@ -1151,6 +1164,39 @@ async fn base_budgets_and_rate_limits_are_independent_from_seismic() {
         .unwrap();
     assert_eq!(legacy_driver.counts(), (1, 1));
     assert_eq!(driver.counts(), (2, 2));
+}
+
+#[tokio::test]
+async fn short_inventory_records_and_charges_nothing_so_the_same_key_succeeds_after_restock() {
+    let redis = TestRedis::start().await;
+    let mut base_config = config(redis.url.clone());
+    enable_base(&mut base_config);
+    let BaseActivation::Enabled(limits) = &mut base_config.base else {
+        unreachable!();
+    };
+    limits.global_erc20_usdc_budget = U256::from(15u64);
+    limits.rate_limit = 1;
+    let driver = base_driver(&base_config, [ChainResult::Success]);
+    let service = FundingService::new(redis.store().await, driver.clone(), base_config.clone());
+    let payout = base_request(&base_config, FundingAsset::BaseErc20Usdc, "payout-1", 15);
+
+    driver.set_inventory_short(true);
+    let error = service.execute(payout.clone()).await.unwrap_err();
+    assert_eq!(
+        (error.status, error.code.as_str(), error.retry_after_seconds),
+        (503, "reserve_insufficient", Some(60))
+    );
+    assert_eq!(driver.counts(), (0, 0));
+
+    driver.set_inventory_short(false);
+    let funded = service.execute(payout.clone()).await.unwrap();
+    assert_eq!(driver.counts(), (1, 1));
+
+    driver.set_inventory_short(true);
+    let replay = service.execute(payout).await.unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.transaction_hash, funded.transaction_hash);
+    assert_eq!(driver.counts(), (1, 1));
 }
 
 #[tokio::test]
