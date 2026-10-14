@@ -121,6 +121,12 @@ where
         self.driver.validate_input(&input)?;
         let asset_scope = self.asset_scope(&input)?;
         let record_key = record_key(&input, &asset_scope);
+        if let Err(refusal) = self.driver.check_inventory(&input).await {
+            // A request already on record is replayed or resumed, never refused.
+            if self.store.get_record(&record_key).await?.is_none() {
+                return Err(refusal);
+            }
+        }
         let fingerprint = fingerprint(&input, &asset_scope);
         let queue_key = queue_key(self.driver.operator_key());
         let queued = FundingRecord::Queued {

@@ -35,6 +35,7 @@ const FEE_HEADROOM_MULTIPLIER: u128 = 2;
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const EXPECTED_TOKEN_DECIMALS: u8 = 6;
 const MAX_MINT_GAS_LIMIT: u64 = 250_000;
+const RESERVE_RESTOCK_RETRY_SECONDS: u64 = 60;
 
 sol! {
     #[sol(rpc)]
@@ -340,6 +341,24 @@ impl ChainDriver for BaseChainDriver {
         Ok(())
     }
 
+    async fn check_inventory(&self, input: &FundingInput) -> Result<(), ServiceError> {
+        let address = self.token_address(input)?;
+        if input.asset != FundingAsset::BaseErc20Usdc || address == self.config.token_address {
+            return Ok(());
+        }
+        let Some(token) = self.config.funding_token(address) else {
+            return Ok(());
+        };
+        let contract = IERC20::new(address, &self.provider);
+        let balance =
+            rpc_timeout(async { contract.balanceOf(self.config.reserve_address).call().await })
+                .await?;
+        match token.replenishment(balance, input.amount) {
+            Err(AssetError::ManualFundingRequired) => Err(reserve_insufficient()),
+            _ => Ok(()),
+        }
+    }
+
     async fn pending_nonce(&self) -> Result<u64, ServiceError> {
         rpc_timeout(async {
             self.provider
@@ -526,6 +545,15 @@ impl ChainDriver for BaseChainDriver {
     async fn reserve_diagnostic(&self) -> Result<Option<ReserveDiagnostic>, ServiceError> {
         self.reserves().await.map(Some)
     }
+}
+
+fn reserve_insufficient() -> ServiceError {
+    ServiceError::new(
+        503,
+        "reserve_insufficient",
+        "The reserve does not hold enough of this token yet; retry unchanged after it is restocked",
+    )
+    .retry(RESERVE_RESTOCK_RETRY_SECONDS)
 }
 
 fn eth_gas_limit(estimate: u64) -> Result<u64, ServiceError> {

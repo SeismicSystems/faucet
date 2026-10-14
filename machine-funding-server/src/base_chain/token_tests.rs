@@ -171,6 +171,40 @@ async fn manual_inventory_never_mints_and_sufficient_inventory_skips_minting() {
 }
 
 #[tokio::test]
+async fn only_a_short_manual_inventory_is_refused_before_admission() {
+    for (balance, manual, default_token, refused) in [
+        (0, true, false, true),
+        (250_000_000, true, false, true),
+        (250_000_001, true, false, false),
+        (0, false, false, false),
+        (0, true, true, false),
+    ] {
+        let (mut driver, mut input, task) = driver(state(balance)).await;
+        if manual {
+            driver.config.additional_erc20_tokens[0].funding = FundingStrategy::ManualInventory;
+        }
+        if default_token {
+            input.network_identity = Some(driver.config.token_identity(Address::with_last_byte(1)));
+        }
+        let result = driver.check_inventory(&input).await;
+        if refused {
+            let error = result.unwrap_err();
+            assert_eq!(
+                (error.status, error.code.as_str(), error.retry_after_seconds),
+                (
+                    503,
+                    "reserve_insufficient",
+                    Some(RESERVE_RESTOCK_RETRY_SECONDS)
+                )
+            );
+        } else {
+            result.unwrap();
+        }
+        task.abort();
+    }
+}
+
+#[tokio::test]
 async fn invalid_contract_and_decimals_are_rejected_before_signing() {
     for state in [
         RpcState {

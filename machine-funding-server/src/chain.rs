@@ -65,6 +65,12 @@ pub trait ChainDriver: Clone + Send + Sync + 'static {
     fn validate_input(&self, _input: &FundingInput) -> Result<(), ServiceError> {
         Ok(())
     }
+    /// Refuses a request the reserve cannot fund yet. The service applies the
+    /// refusal only before a request is recorded or charged to a budget, so the
+    /// caller can retry it unchanged once an operator restocks the reserve.
+    async fn check_inventory(&self, _input: &FundingInput) -> Result<(), ServiceError> {
+        Ok(())
+    }
     async fn pending_nonce(&self) -> Result<u64, ServiceError>;
     async fn can_retry_reverted(
         &self,
